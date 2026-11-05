@@ -1,0 +1,2647 @@
+--[[
+	================================================================
+	  ПОСЛЕДНИЙ МАЯК  v0.1.0  — УСТАНОВЩИК ДЛЯ COMMAND BAR (ЧАСТЬ 1 из 3)
+	================================================================
+	1. Открой Roblox Studio → New → Baseplate (новое пустое место).
+	2. Вкладка View → включи «Command Bar» (и «Output», чтобы видеть сообщения).
+	3. Выдели ВЕСЬ этот текст (Ctrl+A), скопируй (Ctrl+C),
+	   вставь в Command Bar (Ctrl+V) и нажми Enter.
+	4. Подожди 10–30 секунд. В Output появится «✦ УСТАНОВКА ЗАВЕРШЕНА».
+	5. Нажми Play — и играй!
+
+	ВНИМАНИЕ: установщик пересоздаёт ландшафт и мир «LastLighthouseWorld».
+	Запускай его в НОВОМ месте (или там, где уже стоит «Последний Маяк»).
+	Твои ID доната в MonetizationIds при повторной установке сохраняются.
+	Собрано автоматически из папки roblox/LastLighthouse/src.
+]]
+
+local okInstall, installError = pcall(function()
+
+local ChangeHistoryService = game:GetService("ChangeHistoryService")
+local recording = nil
+pcall(function()
+	recording = ChangeHistoryService:TryBeginRecording("Install Last Lighthouse")
+end)
+
+local FILES = {
+	{ service = 'ReplicatedStorage', name = 'Config', class = 'ModuleScript', preserve = false, source = [=[
+--[[
+	ПОСЛЕДНИЙ МАЯК — главный конфиг игры.
+
+	Здесь живут ВСЕ игровые цифры: цены, награды, скорости, тексты сюжета.
+	Хочешь поменять баланс — меняй тут, код трогать не нужно.
+
+	ID донат-товаров лежат отдельно, в модуле MonetizationIds (рядом с этим),
+	чтобы повторный запуск установщика их не стёр.
+]]
+
+local Config = {}
+
+Config.Version = "0.1.0"
+Config.DataStoreName = "LastLighthouse_Players_v1"
+
+-- В Studio можно выдать себе все геймпассы для теста (в опубликованной игре не работает).
+Config.Debug = {
+	GiveAllPassesInStudio = false,
+	StartingLightInStudio = 0,
+}
+
+------------------------------------------------------------------------
+-- ЗВЁЗДНЫЙ СВЕТ (основная валюта)
+------------------------------------------------------------------------
+Config.Light = {
+	ShardValue = 5,             -- сколько света даёт обычный осколок
+	ShardRespawnSeconds = 10,   -- через сколько осколок появится снова
+	BasePickupRadius = 6,       -- радиус сбора без улучшений (в студах)
+	PickupCheckInterval = 0.15, -- как часто сервер проверяет сбор (сек)
+}
+
+------------------------------------------------------------------------
+-- МАЯК (общая цель сервера)
+------------------------------------------------------------------------
+Config.Lighthouse = {
+	-- Сколько света весь сервер должен вложить, чтобы Маяк достиг уровня N.
+	LevelThresholds = { 0, 400, 1200, 3000, 7000, 15000, 30000, 60000 },
+	BonusPerLevel = 0.05, -- +5% света всем игрокам за каждый уровень Маяка
+	XpPerLight = 1,       -- сколько опыта Смотрителя даёт 1 вложенный свет
+}
+
+-- Ранги Смотрителя. Каждый ранг навсегда даёт +RankBonus к множителю света.
+Config.RankBonus = 0.10
+Config.Ranks = {
+	{ xp = 0, name = "Новичок", color = Color3.fromRGB(200, 200, 220) },
+	{ xp = 150, name = "Ученик Смотрителя", color = Color3.fromRGB(140, 220, 255) },
+	{ xp = 800, name = "Смотритель", color = Color3.fromRGB(120, 255, 180) },
+	{ xp = 3000, name = "Старший Смотритель", color = Color3.fromRGB(255, 220, 110) },
+	{ xp = 10000, name = "Хранитель Пламени", color = Color3.fromRGB(255, 150, 90) },
+	{ xp = 30000, name = "Повелитель Света", color = Color3.fromRGB(255, 120, 220) },
+	{ xp = 90000, name = "Легенда Маяка", color = Color3.fromRGB(190, 140, 255) },
+}
+
+------------------------------------------------------------------------
+-- УЛУЧШЕНИЯ (покупаются за свет)
+------------------------------------------------------------------------
+Config.UpgradeOrder = { "Radius", "Speed" }
+Config.Upgrades = {
+	Radius = {
+		name = "Притяжение света",
+		icon = "🧲",
+		description = "Собираешь осколки издалека",
+		maxLevel = 10,
+		baseCost = 40,
+		costGrowth = 1.65,
+		perLevel = 1.2, -- +студов радиуса за уровень
+	},
+	Speed = {
+		name = "Лёгкие шаги",
+		icon = "👟",
+		description = "Бегаешь быстрее",
+		maxLevel = 8,
+		baseCost = 60,
+		costGrowth = 1.75,
+		perLevel = 1.5, -- +скорости ходьбы за уровень
+	},
+}
+
+function Config.GetUpgradeCost(upgradeId, currentLevel)
+	local def = Config.Upgrades[upgradeId]
+	if not def then
+		return nil
+	end
+	return math.floor(def.baseCost * def.costGrowth ^ currentLevel + 0.5)
+end
+
+------------------------------------------------------------------------
+-- ДУХИ-ПИТОМЦЫ
+------------------------------------------------------------------------
+-- currency = "Light" — покупается за свет; "Robux" — через донат-товар productKey.
+Config.BaseEquipSlots = 1
+Config.PassEquipSlots = 3 -- с геймпассом «Ещё два духа»
+
+Config.Pets = {
+	{
+		id = "Firefly",
+		name = "Светлячок",
+		rarity = "Обычный",
+		rarityColor = Color3.fromRGB(180, 230, 255),
+		description = "Маленький, но очень старательный.",
+		currency = "Light",
+		price = 120,
+		lightBonus = 0.15,
+		radiusBonus = 2,
+		color = Color3.fromRGB(255, 240, 120),
+		glow = Color3.fromRGB(255, 220, 80),
+		size = 1.1,
+		style = "orb",
+	},
+	{
+		id = "Jelly",
+		name = "Лунная Медуза",
+		rarity = "Редкий",
+		rarityColor = Color3.fromRGB(120, 200, 255),
+		description = "Плывёт по воздуху, как по воде.",
+		currency = "Light",
+		price = 900,
+		lightBonus = 0.35,
+		radiusBonus = 2,
+		color = Color3.fromRGB(150, 200, 255),
+		glow = Color3.fromRGB(110, 170, 255),
+		size = 1.4,
+		style = "jelly",
+	},
+	{
+		id = "Fox",
+		name = "Звёздный Лис",
+		rarity = "Эпический",
+		rarityColor = Color3.fromRGB(200, 130, 255),
+		description = "Чует свет за версту.",
+		currency = "Light",
+		price = 4500,
+		lightBonus = 0.6,
+		radiusBonus = 4,
+		color = Color3.fromRGB(255, 160, 90),
+		glow = Color3.fromRGB(255, 120, 200),
+		size = 1.5,
+		style = "fox",
+	},
+	{
+		id = "Phoenix",
+		name = "Аврора-Феникс",
+		rarity = "Легендарный",
+		rarityColor = Color3.fromRGB(255, 200, 80),
+		description = "Рождён из северного сияния. Светит ярче всех.",
+		currency = "Robux",
+		productKey = "PhoenixSpirit",
+		lightBonus = 1.0,
+		radiusBonus = 6,
+		color = Color3.fromRGB(120, 255, 200),
+		glow = Color3.fromRGB(255, 120, 220),
+		size = 1.7,
+		style = "phoenix",
+	},
+}
+
+Config.PetById = {}
+for index, pet in ipairs(Config.Pets) do
+	pet.order = index
+	Config.PetById[pet.id] = pet
+end
+
+------------------------------------------------------------------------
+-- ПАРКУР НА РУШАЩЕМСЯ ОСТРОВЕ
+------------------------------------------------------------------------
+Config.Obby = {
+	FinishReward = 250,          -- свет за прохождение
+	FinishXp = 100,              -- опыт за прохождение
+	FinishCooldownSeconds = 45,  -- защита от фарма финиша
+	FallWarnSeconds = 0.55,      -- сколько платформа дрожит перед падением
+	FallRespawnSeconds = 3,      -- через сколько платформа возвращается
+	BlinkPeriodSeconds = 2.2,    -- период мигающих платформ
+	JumpPadVelocity = 95,        -- сила батута
+	VoidY = -35,                 -- ниже этой высоты — возврат на чекпоинт
+}
+
+------------------------------------------------------------------------
+-- СОБЫТИЕ «ТЕНЬ НАСТУПАЕТ»
+------------------------------------------------------------------------
+Config.ShadowEvent = {
+	FirstDelaySeconds = 240,  -- первое событие через 4 минуты после старта сервера
+	IntervalMin = 420,        -- потом раз в 7–10 минут
+	IntervalMax = 600,
+	Duration = 120,           -- сколько длится
+	GoalPerPlayer = 120,      -- сколько света нужно вложить в Маяк (на игрока)
+	GoalMin = 150,
+	RewardLight = 200,        -- награда каждому, кто помог
+	SuccessBoostMinutes = 5,  -- после победы весь сервер получает бонус
+	SuccessBonus = 0.5,       -- +50% света
+	FailPenalty = 0.15,       -- при провале Маяк теряет 15% накопленного
+}
+
+------------------------------------------------------------------------
+-- ДОНАТ
+------------------------------------------------------------------------
+-- Цены здесь — только для текста в магазине. Настоящая цена ставится
+-- на сайте Roblox при создании товара (см. КАК_ЗАПУСТИТЬ.md).
+Config.PassOrder = { "VIP", "Wings", "PetSlots" }
+Config.Passes = {
+	VIP = {
+		name = "VIP Смотритель",
+		icon = "👑",
+		description = "x2 свет навсегда, золотое сияние и VIP-значок над головой",
+		priceText = "199 R$",
+		lightBonus = 1.0,
+	},
+	Wings = {
+		name = "Крылья Смотрителя",
+		icon = "🪶",
+		description = "Двойной прыжок! Паркур станет намного проще",
+		priceText = "149 R$",
+	},
+	PetSlots = {
+		name = "Ещё два духа",
+		icon = "✨",
+		description = "Можно призвать 3 духа одновременно вместо 1",
+		priceText = "249 R$",
+	},
+}
+
+Config.ProductOrder = { "LightSmall", "LightMedium", "LightLarge", "GlobalBoost", "PhoenixSpirit" }
+Config.Products = {
+	LightSmall = {
+		name = "Горсть света",
+		icon = "✦",
+		description = "+500 звёздного света",
+		priceText = "29 R$",
+		light = 500,
+	},
+	LightMedium = {
+		name = "Фонарь света",
+		icon = "🏮",
+		description = "+3 000 звёздного света",
+		priceText = "129 R$",
+		light = 3000,
+	},
+	LightLarge = {
+		name = "Сундук звёзд",
+		icon = "💎",
+		description = "+15 000 звёздного света",
+		priceText = "449 R$",
+		light = 15000,
+	},
+	GlobalBoost = {
+		name = "Зажечь Маяк для всех",
+		icon = "🔥",
+		description = "x2 свет ВСЕМУ серверу на 10 минут. Все увидят твоё имя!",
+		priceText = "99 R$",
+		minutes = 10,
+		bonus = 1.0,
+	},
+	PhoenixSpirit = {
+		name = "Аврора-Феникс",
+		icon = "🌈",
+		description = "Легендарный дух: +100% света и огромный радиус сбора",
+		priceText = "399 R$",
+		pet = "Phoenix",
+		refundLightIfOwned = 15000,
+	},
+}
+
+-- Игроки с Roblox Premium получают небольшой бонус (Roblox платит тебе за их время в игре).
+Config.Premium = { LightBonus = 0.1 }
+
+------------------------------------------------------------------------
+-- ЗВУКИ (вставь ID звуков из Toolbox → Audio, 0 = без звука)
+------------------------------------------------------------------------
+Config.Sounds = {
+	Music = 0,
+	Pickup = 0,
+	Click = 0,
+	Purchase = 0,
+	LevelUp = 0,
+	Shadow = 0,
+}
+
+------------------------------------------------------------------------
+-- СЮЖЕТ
+------------------------------------------------------------------------
+Config.Story = {
+	Title = "ПОСЛЕДНИЙ МАЯК",
+	Subtitle = "Глава I. Тень над облаками",
+	IntroSpeaker = "Старый Орин",
+	IntroLines = {
+		"А... очнулся наконец. Тебя принесло ветром прямо к моему Маяку.",
+		"Когда-то в этом небе горела тысяча маяков. Острова парили над Облачным морем, и ночь была светлой, как день.",
+		"А потом пришла Тень. Она гасит маяки один за другим — и острова без света падают в бездну.",
+		"Этот Маяк — последний. Если погаснет и он... мне даже страшно договаривать.",
+		"Собирай звёздный свет — осколки разбросаны повсюду. Неси его в Маяк, и Тень отступит.",
+		"Свет нужен и тебе самому: на него можно приручить духов и стать сильнее.",
+		"И ещё. Первый Смотритель оставил записки на островах. Найди их. Он знал о Тени больше всех нас...",
+	},
+	Notes = {
+		"Запись первая. Сегодня я зажёг первый маяк. Свет такой тёплый, что облака под островом порозовели. Со мной Лира и малыш Тео — мы будем зажигать маяки вместе.",
+		"Запись вторая. Сорок маяков! Небо стало похоже на гирлянду. Острова тянутся к свету, как цветы к солнцу. Тео смеётся, когда духи садятся ему на плечи.",
+		"Запись третья. Лира и Тео улетели зажигать маяки на дальних островах. Я остался беречь огонь. Ночи почему-то стали длиннее.",
+		"Запись четвёртая. Они не возвращаются. Дальние маяки гаснут один за другим, а я боюсь отойти от своего. Мне кажется, моя тень стала больше меня самого.",
+		"Запись пятая, последняя. Если ты читаешь это — никогда не оставляй маяк гореть в одиночестве. Тьма приходит не снаружи. Она приходит к тем, кто остался один.",
+	},
+	NoteReward = { light = 60, xp = 60 },
+	AllNotesMessage = "Ты прочёл все записки... Первый Смотритель остался один. Неужели Тень — это ОН? Продолжение — в Главе II!",
+	StarShardMessage = "Ты добыл Осколок Звезды! Орин говорит, из таких осколков строят летающие корабли...",
+}
+
+return Config
+]=] },
+	{ service = 'ReplicatedStorage', name = 'MonetizationIds', class = 'ModuleScript', preserve = true, source = [=[
+--[[
+	ID ДОНАТ-ТОВАРОВ.
+
+	1. Опубликуй игру (File → Publish to Roblox).
+	2. Создай геймпассы и товары на create.roblox.com (подробно — в КАК_ЗАПУСТИТЬ.md).
+	3. Вставь сюда их ID вместо нулей.
+
+	0 = товар ещё не создан (кнопка в магазине подскажет, что делать).
+	Повторный запуск установщика этот файл НЕ перезаписывает.
+]]
+
+return {
+	GamePasses = {
+		VIP = 0,      -- «VIP Смотритель»
+		Wings = 0,    -- «Крылья Смотрителя»
+		PetSlots = 0, -- «Ещё два духа»
+	},
+	Products = {
+		LightSmall = 0,    -- «Горсть света» (+500)
+		LightMedium = 0,   -- «Фонарь света» (+3000)
+		LightLarge = 0,    -- «Сундук звёзд» (+15000)
+		GlobalBoost = 0,   -- «Зажечь Маяк для всех»
+		PhoenixSpirit = 0, -- «Аврора-Феникс»
+	},
+}
+]=] },
+	{ service = 'ServerScriptService', name = 'DataService', class = 'ModuleScript', preserve = false, source = [=[
+--[[
+	DataService — загрузка и сохранение прогресса игроков (DataStore).
+
+	• Прогресс сохраняется при выходе, каждые 2 минуты и сразу после доната.
+	• Если DataStore недоступен (например, в Studio без доступа к API),
+	  игра работает, но ничего не сохраняет и пишет предупреждение в Output.
+]]
+
+local DataStoreService = game:GetService("DataStoreService")
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Config = require(ReplicatedStorage:WaitForChild("LastLighthouse"):WaitForChild("Config"))
+
+local DataService = {}
+
+local AUTOSAVE_SECONDS = 120
+local MAX_PURCHASE_LOG = 100
+
+local TEMPLATE = {
+	light = 0,
+	totalLight = 0,
+	keeperXp = 0,
+	upgrades = { Radius = 0, Speed = 0 },
+	pets = {},        -- [petId] = true
+	equipped = {},    -- { petId, ... }
+	notes = {},       -- ["1"] = true
+	introSeen = false,
+	starShards = 0,
+	obbyFinishes = 0,
+	purchases = {},   -- [purchaseId] = true (защита от двойной выдачи)
+	purchaseLog = {}, -- порядок покупок, чтобы чистить старые записи
+	firstJoin = 0,
+}
+
+local profiles = {} -- [player] = { data = {}, canSave = bool, saving = bool }
+local loadedEvent = Instance.new("BindableEvent")
+DataService.Loaded = loadedEvent.Event
+
+local store = nil
+do
+	local ok, result = pcall(function()
+		return DataStoreService:GetDataStore(Config.DataStoreName)
+	end)
+	if ok then
+		store = result
+	else
+		warn("[Маяк] DataStore недоступен — прогресс не будет сохраняться. Включи: Game Settings → Security → Enable Studio Access to API Services. Ошибка: " .. tostring(result))
+	end
+end
+
+local function deepCopy(value)
+	if type(value) ~= "table" then
+		return value
+	end
+	local copy = {}
+	for k, v in pairs(value) do
+		copy[k] = deepCopy(v)
+	end
+	return copy
+end
+
+local function reconcile(data, template)
+	for key, value in pairs(template) do
+		if data[key] == nil then
+			data[key] = deepCopy(value)
+		elseif type(value) == "table" and type(data[key]) == "table" then
+			-- для словарей с фиксированными ключами (upgrades) добиваем недостающие
+			if next(value) ~= nil and #value == 0 then
+				reconcile(data[key], value)
+			end
+		end
+	end
+	return data
+end
+
+local function keyFor(player)
+	return "player_" .. player.UserId
+end
+
+function DataService.Load(player)
+	local data = nil
+	local loadedOk = false
+
+	if store then
+		-- в Studio одна попытка, чтобы не ждать, если доступ к API выключен
+		local attempts = RunService:IsStudio() and 1 or 4
+		for attempt = 1, attempts do
+			local ok, result = pcall(function()
+				return store:GetAsync(keyFor(player))
+			end)
+			if ok then
+				data = result
+				loadedOk = true
+				break
+			end
+			warn("[Маяк] Не удалось загрузить данные " .. player.Name .. " (попытка " .. attempt .. "): " .. tostring(result))
+			if attempt < attempts then
+				task.wait(attempt * 1.5)
+			end
+		end
+	end
+
+	if player.Parent == nil then
+		return nil
+	end
+
+	if type(data) ~= "table" then
+		data = deepCopy(TEMPLATE)
+		data.firstJoin = os.time()
+		if RunService:IsStudio() then
+			data.light = Config.Debug.StartingLightInStudio or 0
+		end
+	end
+	reconcile(data, TEMPLATE)
+
+	profiles[player] = {
+		data = data,
+		-- если загрузка упала, НЕ сохраняем, иначе перезапишем настоящий прогресс пустым
+		canSave = store ~= nil and loadedOk,
+		saving = false,
+	}
+	if store and not loadedOk then
+		warn("[Маяк] Прогресс " .. player.Name .. " не загрузился — в этой сессии он не будет сохраняться.")
+	end
+
+	loadedEvent:Fire(player, data)
+	return data
+end
+
+function DataService.Get(player)
+	local profile = profiles[player]
+	return profile and profile.data or nil
+end
+
+-- Ждёт загрузки профиля (нужно для обработки покупок).
+function DataService.WaitFor(player, timeout)
+	local deadline = os.clock() + (timeout or 10)
+	while os.clock() < deadline do
+		local profile = profiles[player]
+		if profile then
+			return profile.data
+		end
+		if player.Parent == nil then
+			return nil
+		end
+		task.wait(0.2)
+	end
+	return nil
+end
+
+function DataService.CanSave(player)
+	local profile = profiles[player]
+	return profile ~= nil and profile.canSave
+end
+
+-- Возвращает true, если сохранение прошло успешно.
+function DataService.Save(player)
+	local profile = profiles[player]
+	if not profile or not profile.canSave then
+		return false
+	end
+	while profile.saving do
+		task.wait(0.1)
+	end
+	profile.saving = true
+	local success = false
+	for attempt = 1, 3 do
+		local ok, err = pcall(function()
+			store:UpdateAsync(keyFor(player), function()
+				return profile.data
+			end)
+		end)
+		if ok then
+			success = true
+			break
+		end
+		warn("[Маяк] Ошибка сохранения " .. player.Name .. " (попытка " .. attempt .. "): " .. tostring(err))
+		task.wait(attempt)
+	end
+	profile.saving = false
+	return success
+end
+
+function DataService.RecordPurchase(player, purchaseId)
+	local data = DataService.Get(player)
+	if not data then
+		return
+	end
+	data.purchases[purchaseId] = true
+	table.insert(data.purchaseLog, purchaseId)
+	while #data.purchaseLog > MAX_PURCHASE_LOG do
+		local oldest = table.remove(data.purchaseLog, 1)
+		data.purchases[oldest] = nil
+	end
+end
+
+function DataService.Release(player)
+	DataService.Save(player)
+	profiles[player] = nil
+end
+
+function DataService.Start()
+	Players.PlayerRemoving:Connect(function(player)
+		DataService.Release(player)
+	end)
+
+	task.spawn(function()
+		while true do
+			task.wait(AUTOSAVE_SECONDS)
+			for player in pairs(profiles) do
+				task.spawn(DataService.Save, player)
+			end
+		end
+	end)
+
+	game:BindToClose(function()
+		if RunService:IsStudio() and not store then
+			return
+		end
+		local pending = 0
+		for player in pairs(profiles) do
+			pending = pending + 1
+			task.spawn(function()
+				DataService.Save(player)
+				pending = pending - 1
+			end)
+		end
+		local deadline = os.clock() + 25
+		while pending > 0 and os.clock() < deadline do
+			task.wait(0.2)
+		end
+	end)
+end
+
+return DataService
+]=] },
+	{ service = 'ServerScriptService', name = 'LightService', class = 'ModuleScript', preserve = false, source = [=[
+--[[
+	LightService — звёздный свет, Маяк и событие «Тень наступает».
+
+	• Осколки света появляются на точках из папки ShardSpawns.
+	• Сервер сам проверяет расстояние до игрока (читерам сложнее).
+	• Свет можно вложить в Маяк: игрок получает опыт Смотрителя (ранги дают
+	  вечный бонус), а Маяк растёт в уровне и усиливает весь сервер.
+	• Время от времени наступает Тень: сервер должен вместе вложить свет,
+	  иначе Маяк потускнеет.
+]]
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Config = require(ReplicatedStorage:WaitForChild("LastLighthouse"):WaitForChild("Config"))
+local DataService = require(script.Parent:WaitForChild("DataService"))
+local State = require(script.Parent:WaitForChild("ServerState"))
+
+local LightService = {}
+
+local world = workspace:WaitForChild("LastLighthouseWorld")
+local shards = {} -- { part = Part, spawn = BasePart, value = number, active = bool }
+local activeFolder
+local contributors = {}
+local rng = Random.new()
+
+------------------------------------------------------------------------
+-- Осколки
+------------------------------------------------------------------------
+local SHARD_COLORS = {
+	Color3.fromRGB(120, 230, 255),
+	Color3.fromRGB(255, 225, 120),
+	Color3.fromRGB(200, 160, 255),
+}
+
+local function makeShardPart(spawnPart, value)
+	local part = Instance.new("Part")
+	part.Name = "LightShard"
+	part.Size = value > Config.Light.ShardValue and Vector3.new(1.3, 1.3, 1.3) or Vector3.new(0.9, 0.9, 0.9)
+	part.Material = Enum.Material.Neon
+	if value > Config.Light.ShardValue then
+		part.Color = Color3.fromRGB(255, 120, 220)
+	else
+		part.Color = SHARD_COLORS[rng:NextInteger(1, #SHARD_COLORS)]
+	end
+	part.Anchored = true
+	part.CanCollide = false
+	part.CanTouch = false
+	part.CanQuery = false
+	part.CastShadow = false
+	part.CFrame = CFrame.new(spawnPart.Position) * CFrame.Angles(math.rad(45), 0, math.rad(45))
+	part:SetAttribute("Value", value)
+
+	local attachment = Instance.new("Attachment")
+	attachment.Parent = part
+	local sparkle = Instance.new("ParticleEmitter")
+	sparkle.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+	sparkle.Color = ColorSequence.new(part.Color)
+	sparkle.LightEmission = 1
+	sparkle.Size = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.3),
+		NumberSequenceKeypoint.new(1, 0),
+	})
+	sparkle.Transparency = NumberSequence.new(0.1, 1)
+	sparkle.Lifetime = NumberRange.new(0.6, 1)
+	sparkle.Rate = 5
+	sparkle.Speed = NumberRange.new(0.5, 1.5)
+	sparkle.SpreadAngle = Vector2.new(180, 180)
+	sparkle.Parent = attachment
+
+	return part
+end
+
+local function setupShards()
+	activeFolder = world:FindFirstChild("ActiveShards")
+	if not activeFolder then
+		activeFolder = Instance.new("Folder")
+		activeFolder.Name = "ActiveShards"
+		activeFolder.Parent = world
+	end
+	local spawns = world:FindFirstChild("ShardSpawns")
+	if not spawns then
+		warn("[Маяк] Нет папки LastLighthouseWorld.ShardSpawns — осколков не будет")
+		return
+	end
+	for _, spawnPart in ipairs(spawns:GetDescendants()) do
+		if spawnPart:IsA("BasePart") then
+			spawnPart.Transparency = 1
+			spawnPart.CanCollide = false
+			spawnPart.CanTouch = false
+			spawnPart.CanQuery = false
+			local value = spawnPart:GetAttribute("Value") or Config.Light.ShardValue
+			local part = makeShardPart(spawnPart, value)
+			part.Parent = activeFolder
+			table.insert(shards, { part = part, spawn = spawnPart, value = value, active = true })
+		end
+	end
+end
+
+local function collect(player, shard)
+	shard.active = false
+	local position = shard.part.Position
+	shard.part.Parent = nil
+	local amount = math.max(1, math.floor(shard.value * State.GetMultiplier(player) + 0.5))
+	State.AddLight(player, amount)
+	State.Remotes.Fx:FireClient(player, "Pickup", position, amount)
+	task.delay(Config.Light.ShardRespawnSeconds, function()
+		shard.active = true
+		shard.part.Parent = activeFolder
+	end)
+end
+
+local function pickupLoop()
+	local accumulator = 0
+	RunService.Heartbeat:Connect(function(dt)
+		accumulator = accumulator + dt
+		if accumulator < Config.Light.PickupCheckInterval then
+			return
+		end
+		accumulator = 0
+		for _, player in ipairs(Players:GetPlayers()) do
+			local character = player.Character
+			local root = character and character:FindFirstChild("HumanoidRootPart")
+			local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+			if root and humanoid and humanoid.Health > 0 and DataService.Get(player) then
+				local radius = State.GetRadius(player)
+				local position = root.Position
+				for _, shard in ipairs(shards) do
+					if shard.active and (shard.part.Position - position).Magnitude <= radius then
+						collect(player, shard)
+					end
+				end
+			end
+		end
+	end)
+end
+
+------------------------------------------------------------------------
+-- Маяк
+------------------------------------------------------------------------
+local function applyLighthouseVisuals()
+	local lighthouse = world:FindFirstChild("Lighthouse")
+	if not lighthouse then
+		return
+	end
+	local level = State.World.level
+	lighthouse:SetAttribute("Level", level)
+	local lantern = lighthouse:FindFirstChild("Lantern", true)
+	if lantern then
+		local light = lantern:FindFirstChildOfClass("PointLight")
+		if light then
+			light.Range = math.min(60, 28 + level * 4)
+			light.Brightness = 1.5 + level * 0.35
+		end
+		local t = (level - 1) / math.max(1, #Config.Lighthouse.LevelThresholds - 1)
+		lantern.Color = Color3.fromRGB(255, 200, 90):Lerp(Color3.fromRGB(255, 250, 230), t)
+	end
+end
+
+local function recomputeLevel(announce)
+	local thresholds = Config.Lighthouse.LevelThresholds
+	local w = State.World
+	local oldLevel = w.level
+	local level = 1
+	for i, threshold in ipairs(thresholds) do
+		if w.lighthouseTotal >= threshold then
+			level = i
+		end
+	end
+	w.level = level
+	w.prevThreshold = thresholds[level]
+	w.nextThreshold = thresholds[level + 1]
+	applyLighthouseVisuals()
+	if level ~= oldLevel then
+		State.PushAllPlayers()
+		if announce and level > oldLevel then
+			State.NotifyAll("🗼 Маяк разгорелся до уровня " .. level .. "! Весь сервер получает +" .. math.floor((level - 1) * Config.Lighthouse.BonusPerLevel * 100 + 0.5) .. "% света", "level")
+			State.Remotes.Fx:FireAllClients("LighthouseLevel", level)
+		end
+	end
+	State.PushWorld()
+end
+
+function LightService.Deposit(player, fraction)
+	if type(fraction) ~= "number" then
+		return
+	end
+	if fraction ~= 0.25 and fraction ~= 0.5 and fraction ~= 1 then
+		return
+	end
+	local data = DataService.Get(player)
+	if not data then
+		return
+	end
+	local amount = math.floor(data.light * fraction)
+	if amount < 1 then
+		State.Notify(player, "У тебя пока нет света. Собирай сияющие осколки!", "warn")
+		return
+	end
+	if not State.SpendLight(player, amount) then
+		return
+	end
+	State.AddXp(player, amount * Config.Lighthouse.XpPerLight)
+	State.World.lighthouseTotal = State.World.lighthouseTotal + amount
+
+	local shadow = State.World.shadow
+	if shadow.active then
+		shadow.progress = shadow.progress + amount
+		contributors[player] = true
+	end
+
+	State.Remotes.Fx:FireClient(player, "Deposit", amount)
+	State.Notify(player, "Ты отдал Маяку " .. State.FormatNumber(amount) .. " ✦ и получил столько же опыта Смотрителя", "deposit")
+	recomputeLevel(true)
+end
+
+local function setupDepositPrompt()
+	local lighthouse = world:FindFirstChild("Lighthouse")
+	local pad = lighthouse and lighthouse:FindFirstChild("DepositPad", true)
+	if not pad then
+		warn("[Маяк] Не найден DepositPad у Маяка")
+		return
+	end
+	local prompt = pad:FindFirstChildOfClass("ProximityPrompt")
+	if not prompt then
+		prompt = Instance.new("ProximityPrompt")
+		prompt.ActionText = "Отдать свет"
+		prompt.ObjectText = "Маяк"
+		prompt.HoldDuration = 0.3
+		prompt.MaxActivationDistance = 12
+		prompt.RequiresLineOfSight = false
+		prompt.Parent = pad
+	end
+	prompt.Triggered:Connect(function(player)
+		State.Remotes.Fx:FireClient(player, "OpenDeposit")
+	end)
+end
+
+------------------------------------------------------------------------
+-- Событие «Тень наступает»
+------------------------------------------------------------------------
+local function runShadowEvent()
+	local cfg = Config.ShadowEvent
+	local shadow = State.World.shadow
+	contributors = {}
+	shadow.active = true
+	shadow.progress = 0
+	shadow.goal = math.max(cfg.GoalMin, #Players:GetPlayers() * cfg.GoalPerPlayer)
+	shadow.endsAt = State.Now() + cfg.Duration
+	State.NotifyAll("🌑 ТЕНЬ НАСТУПАЕТ! Вложите в Маяк " .. shadow.goal .. " ✦ за " .. math.floor(cfg.Duration / 60) .. " минуты!", "shadow")
+	State.Remotes.Fx:FireAllClients("ShadowStart")
+	State.PushWorld()
+
+	while State.Now() < shadow.endsAt and shadow.progress < shadow.goal do
+		task.wait(0.5)
+		State.PushWorld()
+	end
+
+	shadow.active = false
+	if shadow.progress >= shadow.goal then
+		State.World.shadowBoostUntil = State.Now() + cfg.SuccessBoostMinutes * 60
+		State.NotifyAll("☀️ Тень отступила! Весь сервер получает +" .. math.floor(cfg.SuccessBonus * 100) .. "% света на " .. cfg.SuccessBoostMinutes .. " минут!", "victory")
+		for player in pairs(contributors) do
+			if player.Parent then
+				State.AddLight(player, cfg.RewardLight)
+				State.AddXp(player, cfg.RewardLight)
+				State.Notify(player, "Награда героя: +" .. cfg.RewardLight .. " ✦", "purchase")
+			end
+		end
+		State.Remotes.Fx:FireAllClients("ShadowEnd", true)
+		task.delay(cfg.SuccessBoostMinutes * 60 + 1, function()
+			State.PushAllPlayers()
+			State.PushWorld()
+		end)
+	else
+		State.World.lighthouseTotal = math.floor(State.World.lighthouseTotal * (1 - cfg.FailPenalty))
+		State.NotifyAll("💨 Тень погасила часть огня... Маяк потускнел. В следующий раз — вместе!", "shadow")
+		State.Remotes.Fx:FireAllClients("ShadowEnd", false)
+	end
+	contributors = {}
+	State.PushAllPlayers()
+	recomputeLevel(false)
+end
+
+local function shadowLoop()
+	local cfg = Config.ShadowEvent
+	task.spawn(function()
+		local delaySeconds = cfg.FirstDelaySeconds
+		while true do
+			State.World.shadow.nextAt = State.Now() + delaySeconds
+			State.PushWorld()
+			task.wait(delaySeconds)
+			if #Players:GetPlayers() > 0 then
+				runShadowEvent()
+			end
+			delaySeconds = rng:NextInteger(cfg.IntervalMin, cfg.IntervalMax)
+		end
+	end)
+end
+
+function LightService.Start()
+	setupShards()
+	setupDepositPrompt()
+	recomputeLevel(false)
+	pickupLoop()
+	shadowLoop()
+end
+
+return LightService
+]=] },
+	{ service = 'ServerScriptService', name = 'Main', class = 'Script', preserve = false, source = [=[
+--[[
+	ПОСЛЕДНИЙ МАЯК — точка входа сервера.
+	Запускает все сервисы и обрабатывает вход игроков и их действия.
+]]
+
+local Players = game:GetService("Players")
+
+local folder = script.Parent
+local DataService = require(folder:WaitForChild("DataService"))
+local State = require(folder:WaitForChild("ServerState"))
+local Monetization = require(folder:WaitForChild("MonetizationService"))
+local LightService = require(folder:WaitForChild("LightService"))
+local PetService = require(folder:WaitForChild("PetService"))
+local ShopService = require(folder:WaitForChild("ShopService"))
+local ObbyService = require(folder:WaitForChild("ObbyService"))
+local StoryService = require(folder:WaitForChild("StoryService"))
+
+DataService.Start()
+Monetization.Start()
+LightService.Start()
+PetService.Start()
+ObbyService.Start()
+StoryService.Start()
+
+Monetization.OnPetsChanged = function(player)
+	ShopService.ClampEquipped(player)
+	PetService.Refresh(player)
+	State.PushPlayer(player)
+end
+
+------------------------------------------------------------------------
+-- Действия игрока (всё проверяется на сервере)
+------------------------------------------------------------------------
+local actions = {
+	BuyUpgrade = function(player, id)
+		ShopService.BuyUpgrade(player, id)
+	end,
+	BuyPet = function(player, id)
+		ShopService.BuyPet(player, id)
+	end,
+	EquipPet = function(player, id)
+		ShopService.EquipPet(player, id)
+	end,
+	Deposit = function(player, fraction)
+		LightService.Deposit(player, fraction)
+	end,
+	PromptPass = function(player, key)
+		Monetization.PromptPass(player, key)
+	end,
+	PromptProduct = function(player, key)
+		Monetization.PromptProduct(player, key)
+	end,
+	IntroDone = function(player)
+		StoryService.IntroDone(player)
+	end,
+	ReturnToHub = function(player)
+		ObbyService.ReturnToHub(player)
+	end,
+	RequestState = function(player)
+		State.PushPlayer(player)
+		State.PushWorld(player)
+	end,
+}
+
+local rate = {} -- [player] = { windowStart, count }
+local MAX_ACTIONS_PER_SECOND = 10
+
+State.Remotes.Action.OnServerEvent:Connect(function(player, actionName, arg)
+	if type(actionName) ~= "string" then
+		return
+	end
+	local handler = actions[actionName]
+	if not handler then
+		return
+	end
+	if arg ~= nil and type(arg) ~= "string" and type(arg) ~= "number" then
+		return
+	end
+	local now = os.clock()
+	local r = rate[player]
+	if not r or now - r[1] > 1 then
+		r = { now, 0 }
+		rate[player] = r
+	end
+	r[2] = r[2] + 1
+	if r[2] > MAX_ACTIONS_PER_SECOND then
+		return
+	end
+	if not DataService.Get(player) then
+		return
+	end
+	local ok, err = pcall(handler, player, arg)
+	if not ok then
+		warn("[Маяк] Ошибка действия " .. actionName .. " от " .. player.Name .. ": " .. tostring(err))
+	end
+end)
+
+------------------------------------------------------------------------
+-- Вход игрока
+------------------------------------------------------------------------
+local function onCharacterAdded(player, character)
+	character:WaitForChild("HumanoidRootPart", 10)
+	character:WaitForChild("Head", 10)
+	if player.Parent == nil or player.Character ~= character then
+		return
+	end
+	State.ApplyCharacterPerks(player)
+	PetService.Refresh(player)
+end
+
+local function onPlayerAdded(player)
+	State.SetupLeaderstats(player)
+	Monetization.LoadPasses(player)
+	local data = DataService.Load(player)
+	if not data then
+		return
+	end
+	ShopService.ClampEquipped(player)
+
+	player.CharacterAdded:Connect(function(character)
+		onCharacterAdded(player, character)
+	end)
+	if player.Character then
+		task.spawn(onCharacterAdded, player, player.Character)
+	end
+
+	State.PushPlayer(player)
+	State.PushWorld(player)
+end
+
+Players.PlayerAdded:Connect(onPlayerAdded)
+for _, player in ipairs(Players:GetPlayers()) do
+	task.spawn(onPlayerAdded, player)
+end
+
+Players.PlayerRemoving:Connect(function(player)
+	rate[player] = nil
+end)
+
+print("[Маяк] Сервер «Последний Маяк» v" .. State.Config.Version .. " запущен ✦")
+]=] },
+	{ service = 'ServerScriptService', name = 'MonetizationService', class = 'ModuleScript', preserve = false, source = [=[
+--[[
+	MonetizationService — донат.
+
+	• Геймпассы (покупаются один раз): VIP, Крылья, Ещё два духа.
+	• Developer Products (можно покупать много раз): свет, буст сервера, Феникс.
+	• ProcessReceipt сделан по правилам Roblox: товар выдаётся ровно один раз,
+	  покупка записывается в сохранение, и только после успешного сохранения
+	  Roblox получает ответ «PurchaseGranted». Если что-то пошло не так —
+	  Roblox повторит попытку позже, и игрок не потеряет робуксы.
+]]
+
+local MarketplaceService = game:GetService("MarketplaceService")
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Shared = ReplicatedStorage:WaitForChild("LastLighthouse")
+local Config = require(Shared:WaitForChild("Config"))
+local Ids = require(Shared:WaitForChild("MonetizationIds"))
+local DataService = require(script.Parent:WaitForChild("DataService"))
+local State = require(script.Parent:WaitForChild("ServerState"))
+
+local Monetization = {}
+
+local passKeyById = {}
+for key, id in pairs(Ids.GamePasses) do
+	if type(id) == "number" and id > 0 then
+		passKeyById[id] = key
+	end
+end
+
+local productKeyById = {}
+for key, id in pairs(Ids.Products) do
+	if type(id) == "number" and id > 0 then
+		productKeyById[id] = key
+	end
+end
+
+local function idMissingMessage(name)
+	return "«" .. name .. "» ещё не создан. Создай товар на create.roblox.com и вставь его ID в MonetizationIds (см. КАК_ЗАПУСТИТЬ)."
+end
+
+------------------------------------------------------------------------
+-- Выдача Developer Products. Каждая функция меняет только данные игрока.
+------------------------------------------------------------------------
+local handlers = {}
+
+local function lightPack(key)
+	return function(player)
+		local def = Config.Products[key]
+		State.AddLight(player, def.light)
+		State.Notify(player, "Спасибо! +" .. State.FormatNumber(def.light) .. " ✦ звёздного света", "purchase")
+		State.Remotes.Fx:FireClient(player, "Purchase", def.name)
+	end
+end
+handlers.LightSmall = lightPack("LightSmall")
+handlers.LightMedium = lightPack("LightMedium")
+handlers.LightLarge = lightPack("LightLarge")
+
+handlers.GlobalBoost = function(player)
+	local def = Config.Products.GlobalBoost
+	local now = State.Now()
+	State.World.globalBoostUntil = math.max(State.World.globalBoostUntil, now) + def.minutes * 60
+	State.World.globalBoostBy = player.DisplayName
+	State.NotifyAll("🔥 " .. player.DisplayName .. " зажёг Маяк для всех! x2 свет на " .. def.minutes .. " минут!", "boost")
+	State.Remotes.Fx:FireAllClients("GlobalBoost", player.DisplayName)
+	State.PushWorld()
+	State.PushAllPlayers()
+	-- когда буст закончится — обновим множители у всех
+	task.delay(def.minutes * 60 + 1, function()
+		State.PushWorld()
+		State.PushAllPlayers()
+	end)
+end
+
+handlers.PhoenixSpirit = function(player, data)
+	local def = Config.Products.PhoenixSpirit
+	if data.pets[def.pet] then
+		State.AddLight(player, def.refundLightIfOwned)
+		State.Notify(player, "Феникс уже с тобой — вместо него +" .. State.FormatNumber(def.refundLightIfOwned) .. " ✦", "purchase")
+		return
+	end
+	data.pets[def.pet] = true
+	if #data.equipped < State.GetSlots(player) then
+		table.insert(data.equipped, def.pet)
+	end
+	State.Notify(player, "🌈 Аврора-Феникс теперь твой! Призови его в меню «Духи»", "purchase")
+	State.Remotes.Fx:FireClient(player, "Purchase", Config.PetById[def.pet].name)
+	State.PushPlayer(player)
+	if Monetization.OnPetsChanged then
+		Monetization.OnPetsChanged(player)
+	end
+end
+
+local function processReceipt(receiptInfo)
+	local player = Players:GetPlayerByUserId(receiptInfo.PlayerId)
+	if not player then
+		-- игрок вышел — Roblox повторит, когда он зайдёт снова
+		return Enum.ProductPurchaseDecision.NotProcessedYet
+	end
+
+	local data = DataService.WaitFor(player, 15)
+	if not data then
+		return Enum.ProductPurchaseDecision.NotProcessedYet
+	end
+
+	if data.purchases[receiptInfo.PurchaseId] then
+		return Enum.ProductPurchaseDecision.PurchaseGranted
+	end
+
+	local key = productKeyById[receiptInfo.ProductId]
+	local handler = key and handlers[key]
+	if not handler then
+		warn("[Маяк] Неизвестный товар " .. tostring(receiptInfo.ProductId) .. " — проверь MonetizationIds")
+		return Enum.ProductPurchaseDecision.NotProcessedYet
+	end
+
+	local ok, err = pcall(handler, player, data)
+	if not ok then
+		warn("[Маяк] Ошибка выдачи товара " .. key .. ": " .. tostring(err))
+		return Enum.ProductPurchaseDecision.NotProcessedYet
+	end
+
+	DataService.RecordPurchase(player, receiptInfo.PurchaseId)
+
+	if DataService.CanSave(player) then
+		if not DataService.Save(player) then
+			-- запись о покупке осталась в памяти: при повторе Roblox товар не выдастся дважды
+			return Enum.ProductPurchaseDecision.NotProcessedYet
+		end
+	end
+	return Enum.ProductPurchaseDecision.PurchaseGranted
+end
+
+------------------------------------------------------------------------
+-- Геймпассы
+------------------------------------------------------------------------
+function Monetization.LoadPasses(player)
+	local passes = {}
+	local giveAll = RunService:IsStudio() and Config.Debug.GiveAllPassesInStudio
+	for key, id in pairs(Ids.GamePasses) do
+		if giveAll then
+			passes[key] = true
+		elseif type(id) == "number" and id > 0 then
+			local ok, owns = pcall(function()
+				return MarketplaceService:UserOwnsGamePassAsync(player.UserId, id)
+			end)
+			passes[key] = ok and owns == true
+		else
+			passes[key] = false
+		end
+	end
+	State.Passes[player] = passes
+	return passes
+end
+
+local function onPassPurchased(player, passId, wasPurchased)
+	if not wasPurchased then
+		return
+	end
+	local key = passKeyById[passId]
+	if not key then
+		return
+	end
+	local passes = State.Passes[player] or {}
+	passes[key] = true
+	State.Passes[player] = passes
+
+	local def = Config.Passes[key]
+	State.Notify(player, def.icon .. " " .. def.name .. " активирован! Спасибо за поддержку!", "purchase")
+	State.Remotes.Fx:FireClient(player, "Purchase", def.name)
+	State.ApplyCharacterPerks(player)
+	State.PushPlayer(player)
+	if key == "PetSlots" and Monetization.OnPetsChanged then
+		Monetization.OnPetsChanged(player)
+	end
+end
+
+------------------------------------------------------------------------
+-- Запросы от клиента
+------------------------------------------------------------------------
+function Monetization.PromptPass(player, key)
+	local def = Config.Passes[key]
+	if not def then
+		return
+	end
+	if (State.Passes[player] or {})[key] then
+		State.Notify(player, "У тебя уже есть «" .. def.name .. "»", "info")
+		return
+	end
+	local id = Ids.GamePasses[key]
+	if type(id) ~= "number" or id <= 0 then
+		State.Notify(player, idMissingMessage(def.name), "warn")
+		return
+	end
+	MarketplaceService:PromptGamePassPurchase(player, id)
+end
+
+function Monetization.PromptProduct(player, key)
+	local def = Config.Products[key]
+	if not def then
+		return
+	end
+	if def.pet then
+		local data = DataService.Get(player)
+		if data and data.pets[def.pet] then
+			State.Notify(player, "Этот дух уже с тобой!", "info")
+			return
+		end
+	end
+	local id = Ids.Products[key]
+	if type(id) ~= "number" or id <= 0 then
+		State.Notify(player, idMissingMessage(def.name), "warn")
+		return
+	end
+	MarketplaceService:PromptProductPurchase(player, id)
+end
+
+function Monetization.Start()
+	MarketplaceService.ProcessReceipt = processReceipt
+	MarketplaceService.PromptGamePassPurchaseFinished:Connect(onPassPurchased)
+end
+
+return Monetization
+]=] },
+	{ service = 'ServerScriptService', name = 'ObbyService', class = 'ModuleScript', preserve = false, source = [=[
+--[[
+	ObbyService — паркур на рушащемся острове.
+
+	Папки в LastLighthouseWorld.Obby:
+	  Checkpoints      — детали с атрибутом Index (1, 2, 3...)
+	  FallingPlatforms — дрожат и падают, когда на них наступают
+	  BlinkPlatforms   — мигают; атрибут Phase = 0 или 1
+	  JumpPads         — батуты (подбрасывает клиент, см. Movement)
+	  Finish           — финиш с наградой
+	Упал ниже Config.Obby.VoidY — вернёт на последний чекпоинт.
+]]
+
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Config = require(ReplicatedStorage:WaitForChild("LastLighthouse"):WaitForChild("Config"))
+local DataService = require(script.Parent:WaitForChild("DataService"))
+local State = require(script.Parent:WaitForChild("ServerState"))
+
+local ObbyService = {}
+
+local world = workspace:WaitForChild("LastLighthouseWorld")
+local obby = world:FindFirstChild("Obby")
+local checkpoints = {} -- [player] = BasePart
+local lastFinish = {}  -- [player] = os.clock()
+
+local function playerFromHit(hit)
+	local character = hit and hit:FindFirstAncestorOfClass("Model")
+	if not character then
+		return nil
+	end
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if not humanoid or humanoid.Health <= 0 then
+		return nil
+	end
+	return Players:GetPlayerFromCharacter(character)
+end
+
+local function hubSpawnCFrame()
+	local spawn = world:FindFirstChild("HubSpawn", true)
+	if spawn then
+		return spawn.CFrame + Vector3.new(0, 4, 0)
+	end
+	return CFrame.new(0, 10, 0)
+end
+
+local function teleport(player, cframe)
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if not root then
+		return
+	end
+	root.AssemblyLinearVelocity = Vector3.zero
+	character:PivotTo(cframe)
+end
+
+function ObbyService.ReturnToHub(player)
+	checkpoints[player] = nil
+	teleport(player, hubSpawnCFrame())
+end
+
+------------------------------------------------------------------------
+local function setupCheckpoints()
+	local folder = obby and obby:FindFirstChild("Checkpoints")
+	if not folder then
+		return
+	end
+	for _, cp in ipairs(folder:GetChildren()) do
+		if cp:IsA("BasePart") then
+			cp.Touched:Connect(function(hit)
+				local player = playerFromHit(hit)
+				if not player then
+					return
+				end
+				local current = checkpoints[player]
+				local index = cp:GetAttribute("Index") or 0
+				if current == cp then
+					return
+				end
+				if current and (current:GetAttribute("Index") or 0) >= index then
+					return
+				end
+				checkpoints[player] = cp
+				State.Remotes.Fx:FireClient(player, "Checkpoint", cp.Position, index)
+			end)
+		end
+	end
+end
+
+local function setupFalling()
+	local folder = obby and obby:FindFirstChild("FallingPlatforms")
+	if not folder then
+		return
+	end
+	for _, platform in ipairs(folder:GetChildren()) do
+		if platform:IsA("BasePart") then
+			local origin = platform.CFrame
+			local originColor = platform.Color
+			local originTransparency = platform.Transparency
+			-- светящийся обод (дочерняя деталь Rim) двигаем вместе с платформой
+			local rim = platform:FindFirstChild("Rim")
+			local rimOffset = rim and origin:ToObjectSpace(rim.CFrame)
+			local rimTransparency = rim and rim.Transparency
+			local function moveRim(cf, transparency, time)
+				if not rim then
+					return
+				end
+				if time then
+					TweenService:Create(rim, TweenInfo.new(time, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+						CFrame = cf * rimOffset,
+						Transparency = transparency,
+					}):Play()
+				else
+					rim.CFrame = cf * rimOffset
+				end
+			end
+			local busy = false
+			platform.Touched:Connect(function(hit)
+				if busy or not playerFromHit(hit) then
+					return
+				end
+				busy = true
+				platform.Color = Color3.fromRGB(255, 110, 140)
+				-- дрожь
+				local shakes = math.max(2, math.floor(Config.Obby.FallWarnSeconds / 0.08))
+				for i = 1, shakes do
+					local shake = origin * CFrame.new((i % 2 == 0 and 0.12 or -0.12), 0, 0)
+					platform.CFrame = shake
+					moveRim(shake)
+					task.wait(0.08)
+				end
+				platform.CanCollide = false
+				local fallen = origin * CFrame.new(0, -25, 0) * CFrame.Angles(math.rad(25), 0, math.rad(15))
+				TweenService:Create(platform, TweenInfo.new(0.9, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+					CFrame = fallen,
+					Transparency = 1,
+				}):Play()
+				moveRim(fallen, 1, 0.9)
+				task.wait(Config.Obby.FallRespawnSeconds)
+				platform.CFrame = origin * CFrame.new(0, -3, 0)
+				moveRim(origin * CFrame.new(0, -3, 0))
+				platform.Color = originColor
+				platform.CanCollide = true
+				TweenService:Create(platform, TweenInfo.new(0.4, Enum.EasingStyle.Back), {
+					CFrame = origin,
+					Transparency = originTransparency,
+				}):Play()
+				if rim then
+					TweenService:Create(rim, TweenInfo.new(0.4, Enum.EasingStyle.Back), {
+						CFrame = origin * rimOffset,
+						Transparency = rimTransparency,
+					}):Play()
+				end
+				task.wait(0.4)
+				busy = false
+			end)
+		end
+	end
+end
+
+local function setupBlink()
+	local folder = obby and obby:FindFirstChild("BlinkPlatforms")
+	if not folder then
+		return
+	end
+	local groups = { [0] = {}, [1] = {} }
+	for _, platform in ipairs(folder:GetChildren()) do
+		if platform:IsA("BasePart") then
+			local phase = platform:GetAttribute("Phase") or 0
+			table.insert(groups[phase % 2], platform)
+		end
+	end
+	task.spawn(function()
+		local phase = 0
+		while true do
+			for groupPhase, list in pairs(groups) do
+				local solid = groupPhase == phase
+				for _, platform in ipairs(list) do
+					platform.CanCollide = solid
+					platform.Transparency = solid and 0 or 0.8
+					platform.Material = solid and Enum.Material.Neon or Enum.Material.ForceField
+				end
+			end
+			-- предупреждение: за 0.5 сек до смены твёрдые платформы мерцают
+			task.wait(Config.Obby.BlinkPeriodSeconds - 0.5)
+			for _, platform in ipairs(groups[phase]) do
+				platform.Transparency = 0.4
+			end
+			task.wait(0.5)
+			phase = 1 - phase
+		end
+	end)
+end
+
+local function setupFinish()
+	local finish = obby and obby:FindFirstChild("Finish", true)
+	if not finish or not finish:IsA("BasePart") then
+		return
+	end
+	finish.Touched:Connect(function(hit)
+		local player = playerFromHit(hit)
+		if not player then
+			return
+		end
+		local now = os.clock()
+		if lastFinish[player] and now - lastFinish[player] < Config.Obby.FinishCooldownSeconds then
+			return
+		end
+		lastFinish[player] = now
+		local data = DataService.Get(player)
+		if not data then
+			return
+		end
+		data.obbyFinishes = data.obbyFinishes + 1
+		local reward = math.floor(Config.Obby.FinishReward * State.GetMultiplier(player) + 0.5)
+		State.AddLight(player, reward)
+		State.AddXp(player, Config.Obby.FinishXp)
+		State.Remotes.Fx:FireClient(player, "ObbyFinish", reward)
+		if data.starShards < 1 then
+			data.starShards = 1
+			State.Remotes.Dialogue:FireClient(player, {
+				speaker = "Осколок Звезды",
+				lines = { Config.Story.StarShardMessage },
+			})
+		else
+			State.Notify(player, "Паркур пройден! +" .. State.FormatNumber(reward) .. " ✦", "victory")
+		end
+		State.PushPlayer(player)
+		task.delay(3, function()
+			if player.Parent then
+				ObbyService.ReturnToHub(player)
+			end
+		end)
+	end)
+end
+
+local function setupPortals()
+	-- любые детали с атрибутом Teleport = "Hub" возвращают на остров с Маяком
+	for _, inst in ipairs(world:GetDescendants()) do
+		if inst:IsA("BasePart") and inst:GetAttribute("Teleport") == "Hub" then
+			local debounce = {}
+			inst.Touched:Connect(function(hit)
+				local player = playerFromHit(hit)
+				if player and not debounce[player] then
+					debounce[player] = true
+					ObbyService.ReturnToHub(player)
+					task.delay(1, function()
+						debounce[player] = nil
+					end)
+				end
+			end)
+		end
+	end
+end
+
+local function voidLoop()
+	task.spawn(function()
+		while true do
+			task.wait(0.25)
+			for _, player in ipairs(Players:GetPlayers()) do
+				local character = player.Character
+				local root = character and character:FindFirstChild("HumanoidRootPart")
+				if root and root.Position.Y < Config.Obby.VoidY then
+					local cp = checkpoints[player]
+					if cp and cp.Parent then
+						teleport(player, cp.CFrame + Vector3.new(0, 4, 0))
+					else
+						teleport(player, hubSpawnCFrame())
+					end
+					State.Remotes.Fx:FireClient(player, "Respawned")
+				end
+			end
+		end
+	end)
+end
+
+function ObbyService.Start()
+	if not obby then
+		warn("[Маяк] Нет папки LastLighthouseWorld.Obby — паркур отключён")
+	end
+	setupCheckpoints()
+	setupFalling()
+	setupBlink()
+	setupFinish()
+	setupPortals()
+	voidLoop()
+	Players.PlayerRemoving:Connect(function(player)
+		checkpoints[player] = nil
+		lastFinish[player] = nil
+	end)
+end
+
+return ObbyService
+]=] },
+	{ service = 'ServerScriptService', name = 'PetService', class = 'ModuleScript', preserve = false, source = [=[
+--[[
+	PetService — духи-питомцы, которые летают за игроком.
+
+	Модели духов собираются из простых деталей прямо в коде (ничего
+	не нужно скачивать). Дух следует за игроком через AlignPosition,
+	а физику духа считает компьютер самого игрока — так он летает плавно.
+]]
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Config = require(ReplicatedStorage:WaitForChild("LastLighthouse"):WaitForChild("Config"))
+local DataService = require(script.Parent:WaitForChild("DataService"))
+
+local PetService = {}
+
+local world = workspace:WaitForChild("LastLighthouseWorld")
+local petsFolder = world:FindFirstChild("Pets")
+if not petsFolder then
+	petsFolder = Instance.new("Folder")
+	petsFolder.Name = "Pets"
+	petsFolder.Parent = world
+end
+
+local SLOT_OFFSETS = {
+	Vector3.new(2.8, 1.6, 2.2),
+	Vector3.new(-2.8, 1.6, 2.2),
+	Vector3.new(0, 3.2, 3.4),
+}
+
+local EYE_COLOR = Color3.fromRGB(25, 20, 45)
+
+local function part(props)
+	local p = Instance.new("Part")
+	p.Anchored = false
+	p.CanCollide = false
+	p.CanTouch = false
+	p.CanQuery = false
+	p.CastShadow = false
+	p.Massless = true
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	p.Material = Enum.Material.SmoothPlastic
+	for k, v in pairs(props) do
+		p[k] = v
+	end
+	return p
+end
+
+local function attach(model, root, p, offset)
+	p.CFrame = root.CFrame * offset
+	p.Parent = model
+	local weld = Instance.new("WeldConstraint")
+	weld.Part0 = root
+	weld.Part1 = p
+	weld.Parent = p
+	return p
+end
+
+local function addGlow(root, color, size)
+	local attachment = Instance.new("Attachment")
+	attachment.Name = "Glow"
+	attachment.Parent = root
+
+	local light = Instance.new("PointLight")
+	light.Color = color
+	light.Range = 8 + size * 2
+	light.Brightness = 1.6
+	light.Parent = attachment
+
+	local particles = Instance.new("ParticleEmitter")
+	particles.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+	particles.Color = ColorSequence.new(color)
+	particles.LightEmission = 1
+	particles.Size = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.25 * size),
+		NumberSequenceKeypoint.new(1, 0),
+	})
+	particles.Transparency = NumberSequence.new(0.2, 1)
+	particles.Lifetime = NumberRange.new(0.5, 1)
+	particles.Rate = 8
+	particles.Speed = NumberRange.new(0.2, 0.8)
+	particles.SpreadAngle = Vector2.new(180, 180)
+	particles.Parent = attachment
+end
+
+local function addEyes(model, root, s, forward, height, spread)
+	for _, side in ipairs({ -1, 1 }) do
+		attach(model, root, part({
+			Name = "Eye",
+			Shape = Enum.PartType.Ball,
+			Size = Vector3.new(0.22, 0.22, 0.22) * s,
+			Color = EYE_COLOR,
+		}), CFrame.new(side * spread * s, height * s, -forward * s))
+		attach(model, root, part({
+			Name = "EyeShine",
+			Shape = Enum.PartType.Ball,
+			Size = Vector3.new(0.08, 0.08, 0.08) * s,
+			Color = Color3.new(1, 1, 1),
+			Material = Enum.Material.Neon,
+		}), CFrame.new(side * spread * s + 0.04 * s, (height + 0.05) * s, -(forward + 0.1) * s))
+	end
+end
+
+local builders = {}
+
+builders.orb = function(model, root, def, s)
+	attach(model, root, part({
+		Name = "Core",
+		Shape = Enum.PartType.Ball,
+		Size = Vector3.new(0.55, 0.55, 0.55) * s,
+		Color = def.glow,
+		Material = Enum.Material.Neon,
+	}), CFrame.new(0, -0.05 * s, 0.1 * s))
+	addEyes(model, root, s, 0.45, 0.1, 0.17)
+	for _, side in ipairs({ -1, 1 }) do
+		attach(model, root, part({
+			Name = "Wing",
+			Size = Vector3.new(0.7, 0.05, 0.4) * s,
+			Color = Color3.fromRGB(230, 245, 255),
+			Material = Enum.Material.Glass,
+			Transparency = 0.45,
+		}), CFrame.new(side * 0.5 * s, 0.3 * s, 0.1 * s) * CFrame.Angles(0, 0, side * math.rad(25)))
+	end
+end
+
+builders.jelly = function(model, root, def, s)
+	addEyes(model, root, s, 0.45, 0.0, 0.18)
+	for i = 0, 5 do
+		local angle = i / 6 * math.pi * 2
+		attach(model, root, part({
+			Name = "Tentacle",
+			Size = Vector3.new(0.09, 0.8, 0.09) * s,
+			Color = def.glow,
+			Material = Enum.Material.Neon,
+			Transparency = 0.2,
+		}), CFrame.new(math.cos(angle) * 0.25 * s, -0.65 * s, math.sin(angle) * 0.25 * s))
+	end
+	attach(model, root, part({
+		Name = "Cap",
+		Shape = Enum.PartType.Ball,
+		Size = Vector3.new(1.05, 1.05, 1.05) * s,
+		Color = def.color,
+		Material = Enum.Material.Glass,
+		Transparency = 0.55,
+	}), CFrame.new(0, 0.12 * s, 0))
+end
+
+builders.fox = function(model, root, def, s)
+	addEyes(model, root, s, 0.45, 0.12, 0.17)
+	attach(model, root, part({
+		Name = "Snout",
+		Shape = Enum.PartType.Ball,
+		Size = Vector3.new(0.3, 0.3, 0.3) * s,
+		Color = Color3.fromRGB(255, 235, 215),
+	}), CFrame.new(0, -0.12 * s, -0.42 * s))
+	for _, side in ipairs({ -1, 1 }) do
+		local ear = Instance.new("WedgePart")
+		ear.Anchored = false
+		ear.CanCollide = false
+		ear.CanTouch = false
+		ear.CanQuery = false
+		ear.Massless = true
+		ear.CastShadow = false
+		ear.Size = Vector3.new(0.1, 0.45, 0.3) * s
+		ear.Color = def.color
+		ear.Material = Enum.Material.SmoothPlastic
+		attach(model, root, ear, CFrame.new(side * 0.25 * s, 0.5 * s, 0) * CFrame.Angles(0, math.rad(90), side * math.rad(-12)))
+	end
+	attach(model, root, part({
+		Name = "Tail",
+		Shape = Enum.PartType.Ball,
+		Size = Vector3.new(0.5, 0.5, 0.5) * s,
+		Color = def.glow,
+		Material = Enum.Material.Neon,
+	}), CFrame.new(0, 0.1 * s, 0.6 * s))
+end
+
+builders.phoenix = function(model, root, def, s)
+	addEyes(model, root, s, 0.45, 0.12, 0.16)
+	attach(model, root, part({
+		Name = "Beak",
+		Size = Vector3.new(0.15, 0.12, 0.25) * s,
+		Color = Color3.fromRGB(255, 210, 90),
+	}), CFrame.new(0, -0.02 * s, -0.55 * s))
+	for _, side in ipairs({ -1, 1 }) do
+		attach(model, root, part({
+			Name = "Wing",
+			Size = Vector3.new(1.3, 0.06, 0.6) * s,
+			Color = def.glow,
+			Material = Enum.Material.Neon,
+			Transparency = 0.1,
+		}), CFrame.new(side * 0.85 * s, 0.25 * s, 0.1 * s) * CFrame.Angles(0, side * math.rad(-15), side * math.rad(20)))
+	end
+	for i = -1, 1 do
+		attach(model, root, part({
+			Name = "Tail",
+			Size = Vector3.new(0.12, 0.06, 1.1) * s,
+			Color = i == 0 and def.color or def.glow,
+			Material = Enum.Material.Neon,
+		}), CFrame.new(i * 0.18 * s, 0, 0.85 * s) * CFrame.Angles(0, i * math.rad(18), 0))
+	end
+	attach(model, root, part({
+		Name = "Crest",
+		Size = Vector3.new(0.06, 0.35, 0.25) * s,
+		Color = def.glow,
+		Material = Enum.Material.Neon,
+	}), CFrame.new(0, 0.55 * s, -0.1 * s) * CFrame.Angles(math.rad(-20), 0, 0))
+end
+
+local function buildPet(def)
+	local model = Instance.new("Model")
+	model.Name = def.id
+	local s = def.size
+	local root = part({
+		Name = "Root",
+		Shape = Enum.PartType.Ball,
+		Size = Vector3.new(1, 1, 1) * s,
+		Color = def.color,
+		Massless = false,
+	})
+	root.Parent = model
+	model.PrimaryPart = root
+
+	local builder = builders[def.style] or builders.orb
+	builder(model, root, def, s)
+	addGlow(root, def.glow, s)
+
+	local tag = Instance.new("BillboardGui")
+	tag.Name = "PetTag"
+	tag.Size = UDim2.fromOffset(140, 22)
+	tag.StudsOffset = Vector3.new(0, 1.1 * s, 0)
+	tag.MaxDistance = 40
+	tag.LightInfluence = 0
+	local label = Instance.new("TextLabel")
+	label.BackgroundTransparency = 1
+	label.Size = UDim2.fromScale(1, 1)
+	label.Font = Enum.Font.FredokaOne
+	label.TextScaled = true
+	label.Text = def.name
+	label.TextColor3 = def.rarityColor
+	label.TextStrokeTransparency = 0.4
+	label.Parent = tag
+	tag.Parent = root
+
+	return model, root
+end
+
+local function clearPets(player)
+	local folder = petsFolder:FindFirstChild(tostring(player.UserId))
+	if folder then
+		folder:Destroy()
+	end
+end
+
+function PetService.Refresh(player)
+	clearPets(player)
+	local data = DataService.Get(player)
+	local character = player.Character
+	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	if not data or not hrp then
+		return
+	end
+
+	local folder = Instance.new("Folder")
+	folder.Name = tostring(player.UserId)
+	folder.Parent = petsFolder
+
+	for index, petId in ipairs(data.equipped) do
+		local def = Config.PetById[petId]
+		local offset = SLOT_OFFSETS[index]
+		if def and offset then
+			local slotName = "PetSlot" .. index
+			local slot = hrp:FindFirstChild(slotName)
+			if not slot then
+				slot = Instance.new("Attachment")
+				slot.Name = slotName
+				slot.Parent = hrp
+			end
+			slot.Position = offset
+			slot:SetAttribute("BasePosition", offset)
+
+			local model, root = buildPet(def)
+			model:PivotTo(hrp.CFrame * CFrame.new(offset))
+
+			local attachment = Instance.new("Attachment")
+			attachment.Name = "Follow"
+			attachment.Parent = root
+
+			local alignPosition = Instance.new("AlignPosition")
+			alignPosition.Attachment0 = attachment
+			alignPosition.Attachment1 = slot
+			alignPosition.Responsiveness = 18
+			alignPosition.MaxForce = 100000
+			alignPosition.MaxVelocity = 200
+			alignPosition.Parent = root
+
+			local alignOrientation = Instance.new("AlignOrientation")
+			alignOrientation.Attachment0 = attachment
+			alignOrientation.Attachment1 = slot
+			alignOrientation.Responsiveness = 12
+			alignOrientation.MaxTorque = 100000
+			alignOrientation.Parent = root
+
+			model.Parent = folder
+			pcall(function()
+				root:SetNetworkOwner(player)
+			end)
+		end
+	end
+end
+
+function PetService.Start()
+	Players.PlayerRemoving:Connect(clearPets)
+end
+
+return PetService
+]=] },
+	{ service = 'ServerScriptService', name = 'ServerState', class = 'ModuleScript', preserve = false, source = [=[
+--[[
+	ServerState — общее состояние сервера и связь с клиентами.
+
+	Тут: RemoteEvent'ы, кэш купленных геймпассов, состояние Маяка,
+	формулы множителя света / радиуса сбора, отправка данных игрокам,
+	табличка над головой и VIP-сияние.
+]]
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Shared = ReplicatedStorage:WaitForChild("LastLighthouse")
+local Config = require(Shared:WaitForChild("Config"))
+local DataService = require(script.Parent:WaitForChild("DataService"))
+
+local State = {}
+State.Config = Config
+State.Passes = {} -- [player] = { VIP = true, Wings = false, ... }
+State.World = {
+	lighthouseTotal = 0,
+	level = 1,
+	nextThreshold = Config.Lighthouse.LevelThresholds[2],
+	prevThreshold = 0,
+	globalBoostUntil = 0,
+	globalBoostBy = "",
+	shadowBoostUntil = 0,
+	shadow = { active = false, progress = 0, goal = 0, endsAt = 0, nextAt = 0 },
+}
+
+function State.Now()
+	return workspace:GetServerTimeNow()
+end
+
+------------------------------------------------------------------------
+-- Remotes
+------------------------------------------------------------------------
+local remotesFolder = Shared:FindFirstChild("Remotes")
+if not remotesFolder then
+	remotesFolder = Instance.new("Folder")
+	remotesFolder.Name = "Remotes"
+	remotesFolder.Parent = Shared
+end
+
+local function remote(name)
+	local r = remotesFolder:FindFirstChild(name)
+	if not r then
+		r = Instance.new("RemoteEvent")
+		r.Name = name
+		r.Parent = remotesFolder
+	end
+	return r
+end
+
+State.Remotes = {
+	Notify = remote("Notify"),           -- S→C: всплывающее сообщение
+	PlayerState = remote("PlayerState"), -- S→C: данные игрока
+	WorldState = remote("WorldState"),   -- S→C: состояние Маяка и событий
+	Fx = remote("Fx"),                   -- S→C: эффекты (сбор, награды, окна)
+	Dialogue = remote("Dialogue"),       -- S→C: показать диалог
+	Action = remote("Action"),           -- C→S: действия игрока (покупки и т.п.)
+}
+
+------------------------------------------------------------------------
+-- Формулы
+------------------------------------------------------------------------
+function State.GetRank(xp)
+	local index = 1
+	for i, rank in ipairs(Config.Ranks) do
+		if xp >= rank.xp then
+			index = i
+		end
+	end
+	local nextRank = Config.Ranks[index + 1]
+	return index, Config.Ranks[index], nextRank
+end
+
+function State.GetMultiplier(player)
+	local data = DataService.Get(player)
+	local passes = State.Passes[player] or {}
+	local now = State.Now()
+	local mult = 1
+
+	if passes.VIP then
+		mult = mult + Config.Passes.VIP.lightBonus
+	end
+	if player.MembershipType == Enum.MembershipType.Premium then
+		mult = mult + Config.Premium.LightBonus
+	end
+	mult = mult + (State.World.level - 1) * Config.Lighthouse.BonusPerLevel
+	if State.World.globalBoostUntil > now then
+		mult = mult + Config.Products.GlobalBoost.bonus
+	end
+	if State.World.shadowBoostUntil > now then
+		mult = mult + Config.ShadowEvent.SuccessBonus
+	end
+	if data then
+		local rankIndex = State.GetRank(data.keeperXp)
+		mult = mult + (rankIndex - 1) * Config.RankBonus
+		for _, petId in ipairs(data.equipped) do
+			local pet = Config.PetById[petId]
+			if pet then
+				mult = mult + pet.lightBonus
+			end
+		end
+	end
+	return mult
+end
+
+function State.GetRadius(player)
+	local data = DataService.Get(player)
+	local radius = Config.Light.BasePickupRadius
+	if data then
+		radius = radius + (data.upgrades.Radius or 0) * Config.Upgrades.Radius.perLevel
+		for _, petId in ipairs(data.equipped) do
+			local pet = Config.PetById[petId]
+			if pet then
+				radius = radius + pet.radiusBonus
+			end
+		end
+	end
+	return radius
+end
+
+function State.GetWalkSpeed(player)
+	local data = DataService.Get(player)
+	local level = data and data.upgrades.Speed or 0
+	return 16 + level * Config.Upgrades.Speed.perLevel
+end
+
+function State.GetSlots(player)
+	local passes = State.Passes[player] or {}
+	if passes.PetSlots then
+		return Config.PassEquipSlots
+	end
+	return Config.BaseEquipSlots
+end
+
+------------------------------------------------------------------------
+-- Изменение валюты
+------------------------------------------------------------------------
+function State.AddLight(player, amount)
+	local data = DataService.Get(player)
+	if not data or amount <= 0 then
+		return false
+	end
+	data.light = data.light + amount
+	data.totalLight = data.totalLight + amount
+	State.PushPlayer(player)
+	return true
+end
+
+function State.SpendLight(player, amount)
+	local data = DataService.Get(player)
+	if not data or amount < 0 or data.light < amount then
+		return false
+	end
+	data.light = data.light - amount
+	State.PushPlayer(player)
+	return true
+end
+
+function State.AddXp(player, amount)
+	local data = DataService.Get(player)
+	if not data or amount <= 0 then
+		return
+	end
+	local before = State.GetRank(data.keeperXp)
+	data.keeperXp = data.keeperXp + amount
+	local after, rank = State.GetRank(data.keeperXp)
+	if after > before then
+		State.Notify(player, "Новый ранг: " .. rank.name .. "! Свет +" .. math.floor(Config.RankBonus * 100) .. "% навсегда", "rank")
+		State.Remotes.Fx:FireClient(player, "RankUp", rank.name)
+		State.UpdateOverhead(player)
+	end
+	State.PushPlayer(player)
+end
+
+------------------------------------------------------------------------
+-- Сообщения
+------------------------------------------------------------------------
+function State.Notify(player, text, kind)
+	State.Remotes.Notify:FireClient(player, text, kind or "info")
+end
+
+function State.NotifyAll(text, kind)
+	State.Remotes.Notify:FireAllClients(text, kind or "info")
+end
+
+------------------------------------------------------------------------
+-- Отправка состояния клиентам (склеивает много изменений за кадр в одно)
+------------------------------------------------------------------------
+local pendingPlayers = {}
+
+local function buildSnapshot(player, data)
+	local rankIndex, rank, nextRank = State.GetRank(data.keeperXp)
+	return {
+		light = data.light,
+		totalLight = data.totalLight,
+		keeperXp = data.keeperXp,
+		rankIndex = rankIndex,
+		rankName = rank.name,
+		rankXp = rank.xp,
+		nextRankXp = nextRank and nextRank.xp or nil,
+		upgrades = data.upgrades,
+		pets = data.pets,
+		equipped = data.equipped,
+		notes = data.notes,
+		starShards = data.starShards,
+		introSeen = data.introSeen,
+		passes = State.Passes[player] or {},
+		multiplier = State.GetMultiplier(player),
+		radius = State.GetRadius(player),
+		slots = State.GetSlots(player),
+	}
+end
+
+function State.PushPlayer(player)
+	if pendingPlayers[player] then
+		return
+	end
+	pendingPlayers[player] = true
+	task.defer(function()
+		pendingPlayers[player] = nil
+		if player.Parent == nil then
+			return
+		end
+		local data = DataService.Get(player)
+		if not data then
+			return
+		end
+		State.Remotes.PlayerState:FireClient(player, buildSnapshot(player, data))
+		State.UpdateLeaderstats(player, data)
+	end)
+end
+
+function State.PushAllPlayers()
+	for _, player in ipairs(Players:GetPlayers()) do
+		State.PushPlayer(player)
+	end
+end
+
+local function worldSnapshot()
+	local w = State.World
+	return {
+		lighthouseTotal = w.lighthouseTotal,
+		level = w.level,
+		maxLevel = #Config.Lighthouse.LevelThresholds,
+		nextThreshold = w.nextThreshold,
+		prevThreshold = w.prevThreshold,
+		globalBoostUntil = w.globalBoostUntil,
+		globalBoostBy = w.globalBoostBy,
+		shadowBoostUntil = w.shadowBoostUntil,
+		shadow = {
+			active = w.shadow.active,
+			progress = w.shadow.progress,
+			goal = w.shadow.goal,
+			endsAt = w.shadow.endsAt,
+			nextAt = w.shadow.nextAt,
+		},
+	}
+end
+
+local worldPending = false
+function State.PushWorld(player)
+	if player then
+		State.Remotes.WorldState:FireClient(player, worldSnapshot())
+		return
+	end
+	if worldPending then
+		return
+	end
+	worldPending = true
+	task.defer(function()
+		worldPending = false
+		State.Remotes.WorldState:FireAllClients(worldSnapshot())
+	end)
+end
+
+------------------------------------------------------------------------
+-- Таблица лидеров и табличка над головой
+------------------------------------------------------------------------
+local function formatNumber(n)
+	n = math.floor(n)
+	if n >= 1000000 then
+		return string.format("%.1fM", n / 1000000)
+	elseif n >= 10000 then
+		return string.format("%.1fK", n / 1000)
+	end
+	return tostring(n)
+end
+State.FormatNumber = formatNumber
+
+function State.SetupLeaderstats(player)
+	local stats = Instance.new("Folder")
+	stats.Name = "leaderstats"
+	local light = Instance.new("StringValue")
+	light.Name = "✦ Свет"
+	light.Value = "0"
+	light.Parent = stats
+	local rank = Instance.new("StringValue")
+	rank.Name = "Ранг"
+	rank.Value = Config.Ranks[1].name
+	rank.Parent = stats
+	stats.Parent = player
+end
+
+function State.UpdateLeaderstats(player, data)
+	local stats = player:FindFirstChild("leaderstats")
+	if not stats then
+		return
+	end
+	local light = stats:FindFirstChild("✦ Свет")
+	if light then
+		light.Value = formatNumber(data.light)
+	end
+	local rankValue = stats:FindFirstChild("Ранг")
+	if rankValue then
+		local _, rank = State.GetRank(data.keeperXp)
+		rankValue.Value = rank.name
+	end
+end
+
+function State.UpdateOverhead(player)
+	local character = player.Character
+	local head = character and character:FindFirstChild("Head")
+	local data = DataService.Get(player)
+	if not head or not data then
+		return
+	end
+	local gui = head:FindFirstChild("KeeperTag")
+	if not gui then
+		gui = Instance.new("BillboardGui")
+		gui.Name = "KeeperTag"
+		gui.Size = UDim2.fromOffset(220, 46)
+		gui.StudsOffset = Vector3.new(0, 2.6, 0)
+		gui.MaxDistance = 80
+		gui.AlwaysOnTop = false
+		gui.LightInfluence = 0
+
+		local rankLabel = Instance.new("TextLabel")
+		rankLabel.Name = "Rank"
+		rankLabel.BackgroundTransparency = 1
+		rankLabel.Size = UDim2.new(1, 0, 0.5, 0)
+		rankLabel.Position = UDim2.fromScale(0, 0.5)
+		rankLabel.Font = Enum.Font.FredokaOne
+		rankLabel.TextScaled = true
+		rankLabel.TextStrokeTransparency = 0.4
+		rankLabel.Parent = gui
+
+		local vipLabel = Instance.new("TextLabel")
+		vipLabel.Name = "VIP"
+		vipLabel.BackgroundTransparency = 1
+		vipLabel.Size = UDim2.new(1, 0, 0.5, 0)
+		vipLabel.Font = Enum.Font.FredokaOne
+		vipLabel.TextScaled = true
+		vipLabel.Text = "👑 VIP"
+		vipLabel.TextColor3 = Color3.fromRGB(255, 215, 90)
+		vipLabel.TextStrokeTransparency = 0.3
+		vipLabel.Parent = gui
+
+		gui.Parent = head
+	end
+	local _, rank = State.GetRank(data.keeperXp)
+	gui.Rank.Text = rank.name
+	gui.Rank.TextColor3 = rank.color
+	gui.VIP.Visible = (State.Passes[player] or {}).VIP == true
+end
+
+function State.ApplyCharacterPerks(player)
+	local character = player.Character
+	if not character then
+		return
+	end
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		humanoid.WalkSpeed = State.GetWalkSpeed(player)
+	end
+
+	local passes = State.Passes[player] or {}
+	player:SetAttribute("HasWings", passes.Wings == true)
+
+	local root = character:FindFirstChild("HumanoidRootPart")
+	if root then
+		local aura = root:FindFirstChild("VipAura")
+		if passes.VIP and not aura then
+			local attachment = Instance.new("Attachment")
+			attachment.Name = "VipAura"
+			attachment.Parent = root
+
+			local sparkles = Instance.new("ParticleEmitter")
+			sparkles.Name = "GoldSparkles"
+			sparkles.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+			sparkles.Color = ColorSequence.new(Color3.fromRGB(255, 230, 120), Color3.fromRGB(255, 170, 60))
+			sparkles.LightEmission = 1
+			sparkles.Size = NumberSequence.new({
+				NumberSequenceKeypoint.new(0, 0.35),
+				NumberSequenceKeypoint.new(1, 0),
+			})
+			sparkles.Transparency = NumberSequence.new(0.2, 1)
+			sparkles.Lifetime = NumberRange.new(0.8, 1.4)
+			sparkles.Rate = 14
+			sparkles.Speed = NumberRange.new(1, 2.5)
+			sparkles.SpreadAngle = Vector2.new(180, 180)
+			sparkles.Parent = attachment
+
+			local glow = Instance.new("PointLight")
+			glow.Color = Color3.fromRGB(255, 210, 110)
+			glow.Range = 10
+			glow.Brightness = 1.2
+			glow.Parent = attachment
+		elseif not passes.VIP and aura then
+			aura:Destroy()
+		end
+	end
+	State.UpdateOverhead(player)
+end
+
+Players.PlayerRemoving:Connect(function(player)
+	State.Passes[player] = nil
+	pendingPlayers[player] = nil
+end)
+
+return State
+]=] },
+	{ service = 'ServerScriptService', name = 'ShopService', class = 'ModuleScript', preserve = false, source = [=[
+--[[
+	ShopService — покупки за звёздный свет: улучшения и духи.
+	Все проверки (хватает ли света, есть ли уже дух) — на сервере.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Config = require(ReplicatedStorage:WaitForChild("LastLighthouse"):WaitForChild("Config"))
+local DataService = require(script.Parent:WaitForChild("DataService"))
+local State = require(script.Parent:WaitForChild("ServerState"))
+local PetService = require(script.Parent:WaitForChild("PetService"))
+
+local ShopService = {}
+
+function ShopService.BuyUpgrade(player, upgradeId)
+	local def = Config.Upgrades[upgradeId]
+	local data = DataService.Get(player)
+	if not def or not data then
+		return
+	end
+	local level = data.upgrades[upgradeId] or 0
+	if level >= def.maxLevel then
+		State.Notify(player, def.name .. ": уже максимальный уровень!", "info")
+		return
+	end
+	local cost = Config.GetUpgradeCost(upgradeId, level)
+	if not State.SpendLight(player, cost) then
+		State.Notify(player, "Не хватает света: нужно " .. State.FormatNumber(cost) .. " ✦", "warn")
+		return
+	end
+	data.upgrades[upgradeId] = level + 1
+	State.Notify(player, def.icon .. " " .. def.name .. " — уровень " .. (level + 1) .. "!", "upgrade")
+	State.Remotes.Fx:FireClient(player, "Upgrade", upgradeId)
+	State.ApplyCharacterPerks(player)
+	State.PushPlayer(player)
+end
+
+function ShopService.BuyPet(player, petId)
+	local def = Config.PetById[petId]
+	local data = DataService.Get(player)
+	if not def or not data or def.currency ~= "Light" then
+		return
+	end
+	if data.pets[petId] then
+		State.Notify(player, def.name .. " уже с тобой", "info")
+		return
+	end
+	if not State.SpendLight(player, def.price) then
+		State.Notify(player, "Не хватает света: нужно " .. State.FormatNumber(def.price) .. " ✦", "warn")
+		return
+	end
+	data.pets[petId] = true
+	if #data.equipped < State.GetSlots(player) then
+		table.insert(data.equipped, petId)
+	end
+	State.Notify(player, "✨ " .. def.name .. " теперь твой дух!", "pet")
+	State.Remotes.Fx:FireClient(player, "NewPet", def.name)
+	PetService.Refresh(player)
+	State.PushPlayer(player)
+end
+
+function ShopService.EquipPet(player, petId)
+	local def = Config.PetById[petId]
+	local data = DataService.Get(player)
+	if not def or not data or not data.pets[petId] then
+		return
+	end
+	for index, equippedId in ipairs(data.equipped) do
+		if equippedId == petId then
+			table.remove(data.equipped, index)
+			PetService.Refresh(player)
+			State.PushPlayer(player)
+			return
+		end
+	end
+	local slots = State.GetSlots(player)
+	if #data.equipped >= slots then
+		if slots == 1 then
+			-- с одним слотом просто меняем духа
+			data.equipped = { petId }
+		else
+			State.Notify(player, "Все слоты заняты. Убери одного духа или купи «Ещё два духа»", "warn")
+			return
+		end
+	else
+		table.insert(data.equipped, petId)
+	end
+	PetService.Refresh(player)
+	State.PushPlayer(player)
+end
+
+-- Если слотов стало меньше (например, в Studio выключили тестовые пассы) — убираем лишних.
+function ShopService.ClampEquipped(player)
+	local data = DataService.Get(player)
+	if not data then
+		return
+	end
+	local valid = {}
+	local slots = State.GetSlots(player)
+	for _, petId in ipairs(data.equipped) do
+		if data.pets[petId] and Config.PetById[petId] and #valid < slots then
+			table.insert(valid, petId)
+		end
+	end
+	data.equipped = valid
+end
+
+return ShopService
+]=] },
+	{ service = 'ServerScriptService', name = 'StoryService', class = 'ModuleScript', preserve = false, source = [=[
+--[[
+	StoryService — сюжет: вступление, записки первого Смотрителя и Старый Орин.
+
+	• Записки — детали в LastLighthouseWorld.Notes с атрибутом NoteIndex (1..5).
+	• Орин — модель LastLighthouseWorld.Orin, с ним можно поговорить.
+]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Config = require(ReplicatedStorage:WaitForChild("LastLighthouse"):WaitForChild("Config"))
+local DataService = require(script.Parent:WaitForChild("DataService"))
+local State = require(script.Parent:WaitForChild("ServerState"))
+
+local StoryService = {}
+
+local world = workspace:WaitForChild("LastLighthouseWorld")
+
+local function ensurePrompt(parent, action, object)
+	local prompt = parent:FindFirstChildOfClass("ProximityPrompt")
+	if not prompt then
+		prompt = Instance.new("ProximityPrompt")
+		prompt.ActionText = action
+		prompt.ObjectText = object
+		prompt.MaxActivationDistance = 10
+		prompt.RequiresLineOfSight = false
+		prompt.Parent = parent
+	end
+	return prompt
+end
+
+local function countNotes(data)
+	local n = 0
+	for _ in pairs(data.notes) do
+		n = n + 1
+	end
+	return n
+end
+
+local function readNote(player, index)
+	local data = DataService.Get(player)
+	local text = Config.Story.Notes[index]
+	if not data or not text then
+		return
+	end
+	local key = tostring(index)
+	local firstTime = not data.notes[key]
+	data.notes[key] = true
+
+	State.Remotes.Dialogue:FireClient(player, {
+		speaker = "Записка первого Смотрителя (" .. index .. "/" .. #Config.Story.Notes .. ")",
+		lines = { text },
+		style = "note",
+	})
+
+	if firstTime then
+		State.AddLight(player, Config.Story.NoteReward.light)
+		State.AddXp(player, Config.Story.NoteReward.xp)
+		State.Notify(player, "📜 Новая записка! +" .. Config.Story.NoteReward.light .. " ✦", "story")
+		if countNotes(data) >= #Config.Story.Notes then
+			task.delay(1.5, function()
+				if player.Parent then
+					State.Remotes.Dialogue:FireClient(player, {
+						speaker = "Тайна Тени",
+						lines = { Config.Story.AllNotesMessage },
+						style = "shadow",
+					})
+				end
+			end)
+		end
+	end
+	State.PushPlayer(player)
+end
+
+local function orinLines(player)
+	local data = DataService.Get(player)
+	if not data then
+		return { "Подожди немного, путник..." }
+	end
+	local lines = {}
+	local hasPet = next(data.pets) ~= nil
+	local notes = countNotes(data)
+	local rankIndex = State.GetRank(data.keeperXp)
+
+	if State.World.shadow.active then
+		table.insert(lines, "Чувствуешь холод? Тень совсем рядом! Скорее неси свет в Маяк — все вместе мы её прогоним!")
+		return lines
+	end
+	if data.light < 30 and data.keeperXp < 50 then
+		table.insert(lines, "Видишь сияющие осколки? Просто подойди к ним — свет сам потянется к тебе.")
+		table.insert(lines, "Когда наберёшь света, подойди к дверям Маяка и отдай часть огню. За это ты получишь опыт Смотрителя.")
+		return lines
+	end
+	if not hasPet then
+		table.insert(lines, "В одиночку собирать свет тяжело. Загляни в меню «Духи» — Светлячок стоит совсем немного.")
+	end
+	if data.starShards < 1 then
+		table.insert(lines, "За мостом на востоке начинается Рушащийся остров. Острова там уже падают... но на вершине спрятан Осколок Звезды.")
+	end
+	if notes < #Config.Story.Notes then
+		table.insert(lines, "Ты нашёл " .. notes .. " из " .. #Config.Story.Notes .. " записок первого Смотрителя. Поищи на соседних островах и вдоль паркура.")
+	else
+		table.insert(lines, "Ты прочёл все записки... Значит, ты тоже понял. Тень когда-то была одним из нас. Но об этом — позже.")
+	end
+	if rankIndex < #Config.Ranks then
+		table.insert(lines, "Каждый новый ранг Смотрителя навсегда делает твой свет сильнее. Не жалей огня для Маяка!")
+	end
+	if #lines == 0 then
+		table.insert(lines, "Ты стал настоящим Смотрителем. Маяк горит ярче, пока ты рядом.")
+	end
+	return lines
+end
+
+function StoryService.IntroDone(player)
+	local data = DataService.Get(player)
+	if data and not data.introSeen then
+		data.introSeen = true
+		State.PushPlayer(player)
+	end
+end
+
+function StoryService.Start()
+	local notes = world:FindFirstChild("Notes")
+	if notes then
+		for _, note in ipairs(notes:GetDescendants()) do
+			if note:IsA("BasePart") and note:GetAttribute("NoteIndex") then
+				local index = note:GetAttribute("NoteIndex")
+				local prompt = ensurePrompt(note, "Прочитать", "Записка")
+				prompt.Triggered:Connect(function(player)
+					readNote(player, index)
+				end)
+			end
+		end
+	end
+
+	local orin = world:FindFirstChild("Orin")
+	local talkPart = orin and (orin:FindFirstChild("Head") or orin.PrimaryPart)
+	if talkPart then
+		local prompt = ensurePrompt(talkPart, "Поговорить", "Старый Орин")
+		prompt.Triggered:Connect(function(player)
+			State.Remotes.Dialogue:FireClient(player, {
+				speaker = "Старый Орин",
+				lines = orinLines(player),
+			})
+		end)
+	end
+end
+
+return StoryService
+]=] },
+}
+
+local function resolve(path)
+	local node = game
+	for part in string.gmatch(path, "[^%.]+") do
+		if node == game then
+			node = game:GetService(part)
+		else
+			node = node:FindFirstChild(part) or node:WaitForChild(part, 5)
+		end
+	end
+	return node
+end
+
+-- сохраняем ID доната из прошлой установки
+local preserved = {}
+for _, file in ipairs(FILES) do
+	if file.preserve then
+		local root = resolve(file.service)
+		local old = root:FindFirstChild("LastLighthouse") and root.LastLighthouse:FindFirstChild(file.name)
+		if old and old:IsA("LuaSourceContainer") then
+			preserved[file.name] = old.Source
+		end
+	end
+end
+
+-- удаляем старые папки игры
+for _, servicePath in ipairs({ "ReplicatedStorage", "ServerScriptService" }) do
+	local root = resolve(servicePath)
+	local old = root:FindFirstChild("LastLighthouse")
+	if old then
+		old:Destroy()
+	end
+end
+
+-- создаём скрипты
+local created = 0
+for _, file in ipairs(FILES) do
+	local root = resolve(file.service)
+	local folder = root:FindFirstChild("LastLighthouse")
+	if not folder then
+		folder = Instance.new("Folder")
+		folder.Name = "LastLighthouse"
+		folder.Parent = root
+	end
+	local script = Instance.new(file.class)
+	script.Name = file.name
+	script.Source = preserved[file.name] or file.source
+	script.Parent = folder
+	created = created + 1
+end
+print("[Маяк] Скриптов создано: " .. created)
+
+
+if recording then
+	pcall(function()
+		ChangeHistoryService:FinishRecording(recording, Enum.FinishRecordingOperation.Commit)
+	end)
+end
+
+end)
+
+if okInstall then
+	print("✦✦✦ УСТАНОВКА (ЧАСТЬ 1 из 3) ЗАВЕРШЕНА! Теперь вставь следующую часть. ✦✦✦")
+	print("Подсказки: включи Lighting → Technology = Future для лучшей графики; донат настраивается в ReplicatedStorage → LastLighthouse → MonetizationIds")
+else
+	warn("[Маяк] Ошибка установки: " .. tostring(installError))
+end

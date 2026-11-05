@@ -1,0 +1,17 @@
+{
+  "name": "LastLighthouse",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "LastLighthouse": { "$path": "src/shared" }
+    },
+    "ServerScriptService": {
+      "LastLighthouse": { "$path": "src/server" }
+    },
+    "StarterPlayer": {
+      "StarterPlayerScripts": {
+        "LastLighthouse": { "$path": "src/client" }
+      }
+    }
+  }
+}

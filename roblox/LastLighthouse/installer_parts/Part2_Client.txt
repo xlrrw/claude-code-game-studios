@@ -1,0 +1,2374 @@
+--[[
+	================================================================
+	  ПОСЛЕДНИЙ МАЯК  v0.1.0  — УСТАНОВЩИК ДЛЯ COMMAND BAR (ЧАСТЬ 2 из 3)
+	================================================================
+	1. Открой Roblox Studio → New → Baseplate (новое пустое место).
+	2. Вкладка View → включи «Command Bar» (и «Output», чтобы видеть сообщения).
+	3. Выдели ВЕСЬ этот текст (Ctrl+A), скопируй (Ctrl+C),
+	   вставь в Command Bar (Ctrl+V) и нажми Enter.
+	4. Подожди 10–30 секунд. В Output появится «✦ УСТАНОВКА ЗАВЕРШЕНА».
+	5. Нажми Play — и играй!
+
+	ВНИМАНИЕ: установщик пересоздаёт ландшафт и мир «LastLighthouseWorld».
+	Запускай его в НОВОМ месте (или там, где уже стоит «Последний Маяк»).
+	Твои ID доната в MonetizationIds при повторной установке сохраняются.
+	Собрано автоматически из папки roblox/LastLighthouse/src.
+]]
+
+local okInstall, installError = pcall(function()
+
+local ChangeHistoryService = game:GetService("ChangeHistoryService")
+local recording = nil
+pcall(function()
+	recording = ChangeHistoryService:TryBeginRecording("Install Last Lighthouse")
+end)
+
+local FILES = {
+	{ service = 'StarterPlayer.StarterPlayerScripts', name = 'ClientMain', class = 'LocalScript', preserve = false, source = [=[
+--[[
+	ПОСЛЕДНИЙ МАЯК — точка входа клиента.
+	Связывает интерфейс, эффекты, катсцену и движение с сервером.
+]]
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Shared = ReplicatedStorage:WaitForChild("LastLighthouse")
+local Remotes = Shared:WaitForChild("Remotes")
+local folder = script.Parent
+
+local UI = require(folder:WaitForChild("UI"))
+local Effects = require(folder:WaitForChild("Effects"))
+local Intro = require(folder:WaitForChild("Intro"))
+local Movement = require(folder:WaitForChild("Movement"))
+local Sound = require(folder:WaitForChild("Sound"))
+
+local player = Players.LocalPlayer
+
+local Action = Remotes:WaitForChild("Action")
+local function send(actionName, arg)
+	Action:FireServer(actionName, arg)
+end
+
+UI.Init({ send = send })
+Effects.Init()
+Movement.Init(Effects)
+
+------------------------------------------------------------------------
+local introStarted = false
+local lastRank = nil
+
+Remotes:WaitForChild("PlayerState").OnClientEvent:Connect(function(state)
+	UI.SetPlayerState(state)
+	lastRank = state.rankIndex
+	if not state.introSeen and not introStarted then
+		introStarted = true
+		task.spawn(function()
+			local ok, err = pcall(Intro.Play, UI)
+			if not ok then
+				warn("[Маяк] Ошибка катсцены: " .. tostring(err))
+				local camera = workspace.CurrentCamera
+				camera.CameraType = Enum.CameraType.Custom
+				UI.SetHudVisible(true)
+			end
+			send("IntroDone")
+		end)
+	end
+end)
+
+Remotes:WaitForChild("WorldState").OnClientEvent:Connect(function(state)
+	UI.SetWorldState(state)
+	Effects.SetWorldState(state)
+end)
+
+Remotes:WaitForChild("Notify").OnClientEvent:Connect(function(text, kind)
+	UI.Notify(text, kind)
+end)
+
+Remotes:WaitForChild("Dialogue").OnClientEvent:Connect(function(entry)
+	UI.ShowDialogue(entry)
+end)
+
+local fx = {}
+fx.Pickup = function(position, amount)
+	Effects.Pickup(position, amount)
+	UI.BumpLight()
+end
+fx.OpenDeposit = function()
+	UI.OpenDeposit()
+end
+fx.Deposit = function(amount)
+	local lighthouse = workspace:FindFirstChild("LastLighthouseWorld") and workspace.LastLighthouseWorld:FindFirstChild("Lighthouse")
+	local lantern = lighthouse and lighthouse:FindFirstChild("Lantern", true)
+	if lantern then
+		Effects.Burst(lantern.Position, Color3.fromRGB(255, 220, 120), 50, 1.2)
+	end
+	Effects.Celebrate(Color3.fromRGB(255, 211, 107))
+end
+fx.RankUp = function(rankName)
+	Sound.Play("LevelUp")
+	UI.Banner("НОВЫЙ РАНГ!", rankName, Color3.fromRGB(110, 240, 160))
+	Effects.Celebrate()
+	Effects.ScreenFlash(Color3.fromRGB(200, 255, 220), 0.25)
+end
+fx.LighthouseLevel = function(level)
+	Sound.Play("LevelUp")
+	UI.Banner("МАЯК: УРОВЕНЬ " .. level, "Свет стал сильнее для всех!", Color3.fromRGB(255, 211, 107))
+	Effects.ScreenFlash(Color3.fromRGB(255, 240, 200), 0.35)
+end
+fx.ShadowStart = function()
+	UI.Banner("ТЕНЬ НАСТУПАЕТ", "Несите свет в Маяк!", Color3.fromRGB(150, 110, 255))
+end
+fx.ShadowEnd = function(success)
+	if success then
+		UI.Banner("ТЕНЬ ОТСТУПИЛА!", "Вы спасли Маяк ☀️", Color3.fromRGB(110, 240, 160))
+		Effects.Celebrate()
+		Effects.ScreenFlash(Color3.fromRGB(255, 250, 220), 0.4)
+	else
+		UI.Banner("МАЯК ПОТУСКНЕЛ", "В следующий раз — вместе!", Color3.fromRGB(150, 110, 255))
+	end
+end
+fx.Checkpoint = function(position, index)
+	Sound.Play("Pickup")
+	Effects.Ring(position + Vector3.new(0, 1, 0), Color3.fromRGB(110, 240, 160))
+	UI.Notify("🚩 Чекпоинт " .. tostring(index), "victory")
+end
+fx.ObbyFinish = function(reward)
+	Sound.Play("LevelUp")
+	UI.Banner("ПАРКУР ПРОЙДЕН!", "+" .. UI.FormatNumber(reward) .. " ✦", Color3.fromRGB(255, 122, 217))
+	Effects.Celebrate()
+end
+fx.Purchase = function(name)
+	Sound.Play("Purchase")
+	UI.Banner("СПАСИБО!", name, Color3.fromRGB(255, 211, 107))
+	Effects.Celebrate()
+end
+fx.NewPet = function(name)
+	Sound.Play("Purchase")
+	UI.Banner("НОВЫЙ ДУХ!", name, Color3.fromRGB(255, 122, 217))
+	Effects.Celebrate(Color3.fromRGB(255, 122, 217))
+end
+fx.Upgrade = function()
+	Sound.Play("Purchase")
+	local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+	if root then
+		Effects.Ring(root.Position - Vector3.new(0, 2.5, 0), Color3.fromRGB(107, 228, 255))
+	end
+end
+fx.GlobalBoost = function(byName)
+	UI.Banner("🔥 x2 СВЕТ ДЛЯ ВСЕХ!", "Спасибо, " .. tostring(byName) .. "!", Color3.fromRGB(255, 160, 70))
+	Effects.ScreenFlash(Color3.fromRGB(255, 220, 160), 0.3)
+end
+fx.Respawned = function()
+	Effects.ScreenFlash(Color3.fromRGB(200, 180, 255), 0.4)
+end
+
+Remotes:WaitForChild("Fx").OnClientEvent:Connect(function(kind, ...)
+	local handler = fx[kind]
+	if handler then
+		local ok, err = pcall(handler, ...)
+		if not ok then
+			warn("[Маяк] Ошибка эффекта " .. tostring(kind) .. ": " .. tostring(err))
+		end
+	end
+end)
+
+-- на случай, если сервер отправил данные раньше, чем мы подписались
+send("RequestState")
+]=] },
+	{ service = 'StarterPlayer.StarterPlayerScripts', name = 'Effects', class = 'ModuleScript', preserve = false, source = [=[
+--[[
+	Effects — всё красивое, что считается на компьютере игрока:
+	парящие осколки, вращающийся луч Маяка, северное сияние,
+	кружащая вдали Тень, покачивание духов, вспышки и конфетти.
+]]
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local Lighting = game:GetService("Lighting")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Config = require(ReplicatedStorage:WaitForChild("LastLighthouse"):WaitForChild("Config"))
+local Sound = require(script.Parent:WaitForChild("Sound"))
+
+local player = Players.LocalPlayer
+local Effects = {}
+
+local world = workspace:WaitForChild("LastLighthouseWorld")
+local shardBase = setmetatable({}, { __mode = "k" })
+local shadowActive = false
+local lighting = {}
+
+local function tween(inst, time, props, style, direction)
+	local t = TweenService:Create(inst, TweenInfo.new(time, style or Enum.EasingStyle.Quad, direction or Enum.EasingDirection.Out), props)
+	t:Play()
+	return t
+end
+
+local function getRoot()
+	local character = player.Character
+	return character and character:FindFirstChild("HumanoidRootPart")
+end
+
+------------------------------------------------------------------------
+-- Осколки: парят и вращаются
+------------------------------------------------------------------------
+local function trackShard(part)
+	if part:IsA("BasePart") then
+		shardBase[part] = { position = part.Position, phase = math.random() * math.pi * 2 }
+	end
+end
+
+local function animateShards(t)
+	local folder = world:FindFirstChild("ActiveShards")
+	if not folder then
+		return
+	end
+	for _, part in ipairs(folder:GetChildren()) do
+		local base = shardBase[part]
+		if not base and part:IsA("BasePart") then
+			trackShard(part)
+			base = shardBase[part]
+		end
+		if base then
+			local y = math.sin(t * 2 + base.phase) * 0.45
+			part.CFrame = CFrame.new(base.position + Vector3.new(0, y, 0)) * CFrame.Angles(t * 0.9 + base.phase, t * 1.4, math.rad(45))
+		end
+	end
+end
+
+------------------------------------------------------------------------
+-- Маяк: вращающийся луч
+------------------------------------------------------------------------
+local beamPivot, beamPivotBase
+local beams = {}
+
+local function setupLighthouse()
+	local lighthouse = world:FindFirstChild("Lighthouse")
+	if not lighthouse then
+		return
+	end
+	beamPivot = lighthouse:FindFirstChild("BeamPivot", true)
+	if beamPivot then
+		beamPivotBase = beamPivot.CFrame
+		for _, child in ipairs(beamPivot:GetDescendants()) do
+			if child:IsA("Beam") then
+				table.insert(beams, { beam = child, width = child.Width1 })
+			end
+		end
+	end
+	local function applyLevel()
+		local level = lighthouse:GetAttribute("Level") or 1
+		local k = 0.6 + level * 0.12
+		for _, b in ipairs(beams) do
+			b.beam.Width1 = b.width * k
+		end
+	end
+	lighthouse:GetAttributeChangedSignal("Level"):Connect(applyLevel)
+	applyLevel()
+end
+
+local function animateLighthouse(t)
+	if beamPivot and beamPivotBase then
+		local speed = shadowActive and 0.25 or 0.55
+		beamPivot.CFrame = beamPivotBase * CFrame.Angles(0, t * speed, 0)
+	end
+end
+
+------------------------------------------------------------------------
+-- Северное сияние
+------------------------------------------------------------------------
+local aurora = {}
+local function setupAurora()
+	local sky = world:FindFirstChild("Sky")
+	if not sky then
+		return
+	end
+	for _, b in ipairs(sky:GetDescendants()) do
+		if b:IsA("Beam") then
+			table.insert(aurora, { beam = b, c0 = b.CurveSize0, c1 = b.CurveSize1, phase = math.random() * 10 })
+		end
+	end
+end
+
+local function animateAurora(t)
+	for _, a in ipairs(aurora) do
+		a.beam.CurveSize0 = a.c0 + math.sin(t * 0.25 + a.phase) * 40
+		a.beam.CurveSize1 = a.c1 + math.cos(t * 0.2 + a.phase) * 40
+	end
+end
+
+------------------------------------------------------------------------
+-- Тень, кружащая вдали
+------------------------------------------------------------------------
+local wisp, wispRadius = nil, 300
+local function animateWisp(t, dt)
+	if not wisp then
+		wisp = world:FindFirstChild("ShadowWisp")
+		if not wisp then
+			return
+		end
+	end
+	local targetRadius = shadowActive and 110 or 300
+	wispRadius = wispRadius + (targetRadius - wispRadius) * math.min(1, dt * 0.5)
+	local angle = t * 0.05
+	local height = 40 + math.sin(t * 0.3) * 12
+	local position = Vector3.new(math.cos(angle) * wispRadius, height, math.sin(angle) * wispRadius)
+	wisp:PivotTo(CFrame.lookAt(position, Vector3.new(0, 30, 0)))
+end
+
+------------------------------------------------------------------------
+-- Духи: лёгкое покачивание
+------------------------------------------------------------------------
+local function animatePets(t)
+	local root = getRoot()
+	if not root then
+		return
+	end
+	for i = 1, 3 do
+		local slot = root:FindFirstChild("PetSlot" .. i)
+		if slot then
+			local base = slot:GetAttribute("BasePosition")
+			if base then
+				slot.Position = base + Vector3.new(0, math.sin(t * 3 + i * 1.7) * 0.4, 0)
+			end
+		end
+	end
+end
+
+------------------------------------------------------------------------
+-- Одноразовые эффекты
+------------------------------------------------------------------------
+local function burst(position, color, count, size)
+	local part = Instance.new("Part")
+	part.Anchored = true
+	part.CanCollide = false
+	part.CanQuery = false
+	part.CanTouch = false
+	part.Transparency = 1
+	part.Size = Vector3.new(0.2, 0.2, 0.2)
+	part.Position = position
+	part.Parent = workspace
+	local emitter = Instance.new("ParticleEmitter")
+	emitter.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+	emitter.Color = ColorSequence.new(color)
+	emitter.LightEmission = 1
+	emitter.Size = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, size or 0.5),
+		NumberSequenceKeypoint.new(1, 0),
+	})
+	emitter.Transparency = NumberSequence.new(0, 1)
+	emitter.Lifetime = NumberRange.new(0.5, 1.1)
+	emitter.Speed = NumberRange.new(6, 14)
+	emitter.SpreadAngle = Vector2.new(180, 180)
+	emitter.Drag = 4
+	emitter.Rate = 0
+	emitter.Parent = part
+	emitter:Emit(count or 20)
+	task.delay(1.5, function()
+		part:Destroy()
+	end)
+end
+Effects.Burst = burst
+
+local function floatingText(position, text, color)
+	local part = Instance.new("Part")
+	part.Anchored = true
+	part.CanCollide = false
+	part.CanQuery = false
+	part.CanTouch = false
+	part.Transparency = 1
+	part.Size = Vector3.new(0.2, 0.2, 0.2)
+	part.Position = position
+	part.Parent = workspace
+	local gui = Instance.new("BillboardGui")
+	gui.Size = UDim2.fromOffset(120, 40)
+	gui.AlwaysOnTop = true
+	gui.LightInfluence = 0
+	gui.Parent = part
+	local label = Instance.new("TextLabel")
+	label.BackgroundTransparency = 1
+	label.Size = UDim2.fromScale(1, 1)
+	label.Font = Enum.Font.FredokaOne
+	label.TextScaled = true
+	label.Text = text
+	label.TextColor3 = color
+	label.TextStrokeTransparency = 0.2
+	label.Parent = gui
+	tween(part, 1, { Position = position + Vector3.new(0, 4, 0) })
+	task.delay(0.5, function()
+		tween(label, 0.5, { TextTransparency = 1, TextStrokeTransparency = 1 })
+	end)
+	task.delay(1.1, function()
+		part:Destroy()
+	end)
+end
+Effects.FloatingText = floatingText
+
+function Effects.Pickup(position, amount)
+	Sound.Play("Pickup")
+	burst(position, Color3.fromRGB(255, 230, 140), 12, 0.35)
+	-- маленький огонёк летит к игроку
+	local root = getRoot()
+	if root then
+		local orb = Instance.new("Part")
+		orb.Shape = Enum.PartType.Ball
+		orb.Size = Vector3.new(0.5, 0.5, 0.5)
+		orb.Material = Enum.Material.Neon
+		orb.Color = Color3.fromRGB(255, 230, 140)
+		orb.Anchored = true
+		orb.CanCollide = false
+		orb.CanQuery = false
+		orb.CanTouch = false
+		orb.Position = position
+		orb.Parent = workspace
+		local start = os.clock()
+		local conn
+		conn = RunService.RenderStepped:Connect(function()
+			local alpha = math.min(1, (os.clock() - start) / 0.35)
+			local r = getRoot()
+			if not r or alpha >= 1 then
+				conn:Disconnect()
+				orb:Destroy()
+				return
+			end
+			orb.Position = position:Lerp(r.Position, alpha * alpha)
+		end)
+	end
+	floatingText(position + Vector3.new(0, 1.5, 0), "+" .. amount .. " ✦", Color3.fromRGB(255, 220, 110))
+end
+
+function Effects.Celebrate(color)
+	local root = getRoot()
+	if not root then
+		return
+	end
+	local colors = { Color3.fromRGB(255, 211, 107), Color3.fromRGB(255, 122, 217), Color3.fromRGB(107, 228, 255), Color3.fromRGB(110, 240, 160) }
+	for i, c in ipairs(colors) do
+		task.delay(i * 0.08, function()
+			burst(root.Position + Vector3.new(0, 2, 0), color or c, 25, 0.6)
+		end)
+	end
+end
+
+function Effects.Ring(position, color)
+	local ring = Instance.new("Part")
+	ring.Shape = Enum.PartType.Cylinder
+	ring.Anchored = true
+	ring.CanCollide = false
+	ring.CanQuery = false
+	ring.CanTouch = false
+	ring.Material = Enum.Material.Neon
+	ring.Color = color
+	ring.Transparency = 0.2
+	ring.Size = Vector3.new(0.2, 2, 2)
+	ring.CFrame = CFrame.new(position) * CFrame.Angles(0, 0, math.rad(90))
+	ring.Parent = workspace
+	tween(ring, 0.6, { Size = Vector3.new(0.2, 22, 22), Transparency = 1 })
+	task.delay(0.7, function()
+		ring:Destroy()
+	end)
+end
+
+function Effects.ScreenFlash(color, strength)
+	local cc = lighting.color
+	if not cc then
+		return
+	end
+	local base = lighting.colorBase
+	cc.Brightness = base.Brightness + (strength or 0.3)
+	cc.TintColor = color or Color3.new(1, 1, 1)
+	tween(cc, 0.8, { Brightness = shadowActive and -0.05 or base.Brightness, TintColor = shadowActive and Color3.fromRGB(190, 160, 230) or base.TintColor })
+end
+
+------------------------------------------------------------------------
+-- Атмосфера при нашествии Тени
+------------------------------------------------------------------------
+local function applyShadowMood(active)
+	if active == shadowActive then
+		return
+	end
+	shadowActive = active
+	local cc, atmo = lighting.color, lighting.atmosphere
+	if cc then
+		if active then
+			tween(cc, 3, { TintColor = Color3.fromRGB(190, 160, 230), Saturation = -0.15, Brightness = -0.05 })
+		else
+			tween(cc, 3, { TintColor = lighting.colorBase.TintColor, Saturation = lighting.colorBase.Saturation, Brightness = lighting.colorBase.Brightness })
+		end
+	end
+	if atmo then
+		if active then
+			tween(atmo, 3, { Density = math.min(0.75, lighting.atmoBase.Density + 0.25), Color = Color3.fromRGB(60, 30, 90) })
+		else
+			tween(atmo, 3, { Density = lighting.atmoBase.Density, Color = lighting.atmoBase.Color })
+		end
+	end
+	if active then
+		Sound.Play("Shadow")
+	end
+end
+
+function Effects.SetWorldState(ws)
+	applyShadowMood(ws.shadow and ws.shadow.active == true)
+end
+
+------------------------------------------------------------------------
+function Effects.Init()
+	local cc = Lighting:FindFirstChild("LL_Color")
+	local atmo = Lighting:FindFirstChildOfClass("Atmosphere")
+	if cc then
+		lighting.color = cc
+		lighting.colorBase = { TintColor = cc.TintColor, Saturation = cc.Saturation, Brightness = cc.Brightness }
+	end
+	if atmo then
+		lighting.atmosphere = atmo
+		lighting.atmoBase = { Density = atmo.Density, Color = atmo.Color }
+	end
+
+	setupLighthouse()
+	setupAurora()
+
+	RunService.RenderStepped:Connect(function(dt)
+		local t = os.clock()
+		animateShards(t)
+		animateLighthouse(t)
+		animateAurora(t)
+		animateWisp(t, dt)
+		animatePets(t)
+	end)
+
+	Sound.StartMusic()
+end
+
+return Effects
+]=] },
+	{ service = 'StarterPlayer.StarterPlayerScripts', name = 'Intro', class = 'ModuleScript', preserve = false, source = [=[
+--[[
+	Intro — вступительная катсцена при первом входе:
+	пролёт камеры над Облачным морем к Маяку, название игры,
+	затем Старый Орин рассказывает историю.
+]]
+
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Config = require(ReplicatedStorage:WaitForChild("LastLighthouse"):WaitForChild("Config"))
+
+local player = Players.LocalPlayer
+local Intro = {}
+
+local function tween(inst, time, props, style, direction)
+	local t = TweenService:Create(inst, TweenInfo.new(time, style or Enum.EasingStyle.Sine, direction or Enum.EasingDirection.InOut), props)
+	t:Play()
+	return t
+end
+
+local function makeOverlay()
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "LastLighthouseIntro"
+	gui.IgnoreGuiInset = true
+	gui.ResetOnSpawn = false
+	gui.DisplayOrder = 5
+	gui.Parent = player:WaitForChild("PlayerGui")
+
+	local function bar(top)
+		local f = Instance.new("Frame")
+		f.BackgroundColor3 = Color3.new(0, 0, 0)
+		f.BorderSizePixel = 0
+		f.Size = UDim2.new(1, 0, 0, 0)
+		f.AnchorPoint = Vector2.new(0, top and 0 or 1)
+		f.Position = UDim2.fromScale(0, top and 0 or 1)
+		f.Parent = gui
+		return f
+	end
+	local topBar, bottomBar = bar(true), bar(false)
+
+	local fade = Instance.new("Frame")
+	fade.BackgroundColor3 = Color3.fromRGB(8, 6, 20)
+	fade.BorderSizePixel = 0
+	fade.Size = UDim2.fromScale(1, 1)
+	fade.BackgroundTransparency = 0
+	fade.ZIndex = 5
+	fade.Parent = gui
+
+	local title = Instance.new("TextLabel")
+	title.BackgroundTransparency = 1
+	title.AnchorPoint = Vector2.new(0.5, 0.5)
+	title.Position = UDim2.fromScale(0.5, 0.42)
+	title.Size = UDim2.fromScale(0.9, 0.16)
+	title.Font = Enum.Font.FredokaOne
+	title.TextScaled = true
+	title.Text = Config.Story.Title
+	title.TextColor3 = Color3.new(1, 1, 1)
+	title.TextTransparency = 1
+	title.ZIndex = 6
+	title.Parent = gui
+	local g = Instance.new("UIGradient")
+	g.Color = ColorSequence.new(Color3.fromRGB(255, 225, 130), Color3.fromRGB(255, 130, 220))
+	g.Rotation = 90
+	g.Parent = title
+	local st = Instance.new("UIStroke")
+	st.Thickness = 3
+	st.Color = Color3.fromRGB(20, 10, 40)
+	st.Transparency = 1
+	st.Parent = title
+
+	local subtitle = Instance.new("TextLabel")
+	subtitle.BackgroundTransparency = 1
+	subtitle.AnchorPoint = Vector2.new(0.5, 0.5)
+	subtitle.Position = UDim2.fromScale(0.5, 0.53)
+	subtitle.Size = UDim2.fromScale(0.8, 0.05)
+	subtitle.Font = Enum.Font.GothamBold
+	subtitle.TextScaled = true
+	subtitle.Text = Config.Story.Subtitle
+	subtitle.TextColor3 = Color3.fromRGB(200, 190, 255)
+	subtitle.TextTransparency = 1
+	subtitle.ZIndex = 6
+	subtitle.Parent = gui
+
+	local skip = Instance.new("TextButton")
+	skip.AnchorPoint = Vector2.new(1, 1)
+	skip.Position = UDim2.new(1, -20, 1, -20)
+	skip.Size = UDim2.fromOffset(170, 40)
+	skip.BackgroundColor3 = Color3.fromRGB(40, 30, 90)
+	skip.BackgroundTransparency = 0.2
+	skip.Font = Enum.Font.FredokaOne
+	skip.TextSize = 18
+	skip.TextColor3 = Color3.new(1, 1, 1)
+	skip.Text = "Пропустить ▶▶"
+	skip.ZIndex = 10
+	skip.Parent = gui
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, 12)
+	c.Parent = skip
+
+	return {
+		gui = gui,
+		topBar = topBar,
+		bottomBar = bottomBar,
+		fade = fade,
+		title = title,
+		titleStroke = st,
+		subtitle = subtitle,
+		skip = skip,
+	}
+end
+
+function Intro.Play(UI)
+	local character = player.Character or player.CharacterAdded:Wait()
+	local humanoid = character:WaitForChild("Humanoid")
+	local world = workspace:WaitForChild("LastLighthouseWorld")
+	local lighthouse = world:WaitForChild("Lighthouse", 10)
+	local camera = workspace.CurrentCamera
+	if not lighthouse then
+		return
+	end
+
+	local lantern = lighthouse:FindFirstChild("Lantern", true)
+	local target = lantern and lantern.Position or lighthouse:GetPivot().Position
+	local orin = world:FindFirstChild("Orin")
+	local orinHead = orin and orin:FindFirstChild("Head")
+
+	UI.SetHudVisible(false)
+	local o = makeOverlay()
+	local skipped = false
+	o.skip.Activated:Connect(function()
+		skipped = true
+	end)
+
+	local function waitOrSkip(seconds)
+		local deadline = os.clock() + seconds
+		while os.clock() < deadline and not skipped do
+			task.wait()
+		end
+	end
+
+	camera.CameraType = Enum.CameraType.Scriptable
+	camera.CFrame = CFrame.lookAt(target + Vector3.new(260, -40, 260), target)
+
+	tween(o.topBar, 1, { Size = UDim2.new(1, 0, 0.11, 0) })
+	tween(o.bottomBar, 1, { Size = UDim2.new(1, 0, 0.11, 0) })
+	tween(o.fade, 2, { BackgroundTransparency = 1 })
+
+	-- Кадр 1: подъём из Облачного моря
+	local shot1 = tween(camera, 7, { CFrame = CFrame.lookAt(target + Vector3.new(110, 25, 140), target) })
+	task.delay(1.2, function()
+		if skipped then
+			return
+		end
+		tween(o.title, 1.5, { TextTransparency = 0 })
+		tween(o.titleStroke, 1.5, { Transparency = 0 })
+		tween(o.subtitle, 1.5, { TextTransparency = 0 }).Completed:Wait()
+		task.wait(2.5)
+		if skipped then
+			return
+		end
+		tween(o.title, 1, { TextTransparency = 1 })
+		tween(o.titleStroke, 1, { Transparency = 1 })
+		tween(o.subtitle, 1, { TextTransparency = 1 })
+	end)
+	waitOrSkip(7)
+	shot1:Cancel()
+
+	-- Кадр 2: облёт вокруг Маяка
+	if not skipped then
+		local shot2 = tween(camera, 6, { CFrame = CFrame.lookAt(target + Vector3.new(-70, 10, 60), target + Vector3.new(0, -10, 0)) })
+		waitOrSkip(6)
+		shot2:Cancel()
+	end
+
+	o.title.TextTransparency = 1
+	o.titleStroke.Transparency = 1
+	o.subtitle.TextTransparency = 1
+	o.skip.Visible = false
+
+	-- Кадр 3: Старый Орин
+	if orinHead then
+		local look = orinHead.CFrame
+		local from = look * CFrame.new(-3, 1, -9)
+		tween(camera, skipped and 0.6 or 2, { CFrame = CFrame.lookAt(from.Position, look.Position) })
+		task.wait(skipped and 0.6 or 2)
+	end
+	UI.ShowDialogueAsync({ speaker = Config.Story.IntroSpeaker, lines = Config.Story.IntroLines })
+
+	-- Возвращаем управление
+	tween(o.topBar, 0.8, { Size = UDim2.new(1, 0, 0, 0) })
+	tween(o.bottomBar, 0.8, { Size = UDim2.new(1, 0, 0, 0) })
+	camera.CameraType = Enum.CameraType.Custom
+	camera.CameraSubject = humanoid
+	UI.SetHudVisible(true)
+	UI.Banner("Глава I", "Тень над облаками")
+	task.delay(1, function()
+		o.gui:Destroy()
+	end)
+	UI.Notify("Подсказка: подходи к сияющим осколкам — свет сам притянется к тебе ✦", "info")
+end
+
+return Intro
+]=] },
+	{ service = 'StarterPlayer.StarterPlayerScripts', name = 'Movement', class = 'ModuleScript', preserve = false, source = [=[
+--[[
+	Movement — двойной прыжок (геймпасс «Крылья Смотрителя») и батуты.
+	Физику своего персонажа считает компьютер игрока, поэтому это клиентский код.
+]]
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Config = require(ReplicatedStorage:WaitForChild("LastLighthouse"):WaitForChild("Config"))
+
+local player = Players.LocalPlayer
+local Movement = {}
+
+local usedDoubleJump = false
+local lastPad = 0
+local effects
+
+local function wingBurst(root)
+	if effects then
+		effects.Burst(root.Position - Vector3.new(0, 1.5, 0), Color3.fromRGB(200, 240, 255), 18, 0.5)
+	end
+end
+
+local function onCharacter(character)
+	usedDoubleJump = false
+	local humanoid = character:WaitForChild("Humanoid")
+	humanoid.StateChanged:Connect(function(_, new)
+		if new == Enum.HumanoidStateType.Landed or new == Enum.HumanoidStateType.Running then
+			usedDoubleJump = false
+		end
+	end)
+end
+
+local function setupJumpPads()
+	local world = workspace:WaitForChild("LastLighthouseWorld")
+	local obby = world:FindFirstChild("Obby")
+	local pads = obby and obby:FindFirstChild("JumpPads")
+	if not pads then
+		return
+	end
+	for _, pad in ipairs(pads:GetChildren()) do
+		if pad:IsA("BasePart") then
+			pad.Touched:Connect(function(hit)
+				local character = player.Character
+				if not character or not hit:IsDescendantOf(character) then
+					return
+				end
+				if os.clock() - lastPad < 0.6 then
+					return
+				end
+				lastPad = os.clock()
+				local root = character:FindFirstChild("HumanoidRootPart")
+				local humanoid = character:FindFirstChildOfClass("Humanoid")
+				if root and humanoid then
+					local v = root.AssemblyLinearVelocity
+					root.AssemblyLinearVelocity = Vector3.new(v.X, Config.Obby.JumpPadVelocity, v.Z)
+					humanoid:ChangeState(Enum.HumanoidStateType.Freefall)
+					usedDoubleJump = false
+					if effects then
+						effects.Burst(pad.Position + Vector3.new(0, 1, 0), Color3.fromRGB(110, 240, 160), 30, 0.7)
+						effects.Ring(pad.Position + Vector3.new(0, 0.5, 0), Color3.fromRGB(110, 240, 160))
+					end
+				end
+			end)
+		end
+	end
+end
+
+function Movement.Init(effectsModule)
+	effects = effectsModule
+	if player.Character then
+		task.spawn(onCharacter, player.Character)
+	end
+	player.CharacterAdded:Connect(onCharacter)
+
+	UserInputService.JumpRequest:Connect(function()
+		if not player:GetAttribute("HasWings") or usedDoubleJump then
+			return
+		end
+		local character = player.Character
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+		local root = character and character:FindFirstChild("HumanoidRootPart")
+		if not humanoid or not root then
+			return
+		end
+		if humanoid:GetState() ~= Enum.HumanoidStateType.Freefall then
+			return
+		end
+		usedDoubleJump = true
+		local v = root.AssemblyLinearVelocity
+		root.AssemblyLinearVelocity = Vector3.new(v.X, 55, v.Z)
+		humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+		wingBurst(root)
+	end)
+
+	task.spawn(setupJumpPads)
+end
+
+return Movement
+]=] },
+	{ service = 'StarterPlayer.StarterPlayerScripts', name = 'Sound', class = 'ModuleScript', preserve = false, source = [=[
+--[[
+	Sound — звуки и музыка. ID задаются в Config.Sounds (0 = тишина).
+]]
+
+local SoundService = game:GetService("SoundService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Config = require(ReplicatedStorage:WaitForChild("LastLighthouse"):WaitForChild("Config"))
+
+local Sound = {}
+local cache = {}
+
+local function getSound(name)
+	local id = Config.Sounds[name]
+	if type(id) ~= "number" or id <= 0 then
+		return nil
+	end
+	local s = cache[name]
+	if not s then
+		s = Instance.new("Sound")
+		s.Name = "LL_" .. name
+		s.SoundId = "rbxassetid://" .. id
+		s.Volume = 0.6
+		s.Parent = SoundService
+		cache[name] = s
+	end
+	return s
+end
+
+function Sound.Play(name)
+	local s = getSound(name)
+	if s then
+		SoundService:PlayLocalSound(s)
+	end
+end
+
+function Sound.StartMusic()
+	local s = getSound("Music")
+	if s then
+		s.Looped = true
+		s.Volume = 0.3
+		s:Play()
+	end
+end
+
+return Sound
+]=] },
+	{ service = 'StarterPlayer.StarterPlayerScripts', name = 'UI', class = 'ModuleScript', preserve = false, source = [=[
+--[[
+	UI — весь интерфейс игры, собранный из кода.
+
+	HUD (свет, ранг, Маяк, события), магазин (улучшения / духи / донат),
+	окно вклада в Маяк, диалоги с эффектом печатной машинки,
+	всплывающие уведомления и большие баннеры.
+	Автоматически масштабируется под телефон, планшет и ПК.
+]]
+
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Config = require(ReplicatedStorage:WaitForChild("LastLighthouse"):WaitForChild("Config"))
+local Sound = require(script.Parent:WaitForChild("Sound"))
+
+local player = Players.LocalPlayer
+local UI = {}
+
+------------------------------------------------------------------------
+-- Палитра
+------------------------------------------------------------------------
+local C = {
+	Night = Color3.fromRGB(14, 12, 38),
+	Panel = Color3.fromRGB(30, 25, 70),
+	Panel2 = Color3.fromRGB(48, 38, 104),
+	Gold = Color3.fromRGB(255, 211, 107),
+	Gold2 = Color3.fromRGB(255, 160, 70),
+	Cyan = Color3.fromRGB(107, 228, 255),
+	Pink = Color3.fromRGB(255, 122, 217),
+	Violet = Color3.fromRGB(150, 110, 255),
+	Green = Color3.fromRGB(110, 240, 160),
+	Red = Color3.fromRGB(255, 95, 120),
+	Text = Color3.fromRGB(244, 240, 255),
+	Muted = Color3.fromRGB(175, 168, 220),
+	Shadow = Color3.fromRGB(40, 10, 60),
+}
+UI.Colors = C
+
+local KIND_COLORS = {
+	info = C.Cyan,
+	warn = C.Red,
+	purchase = C.Gold,
+	boost = C.Gold2,
+	level = C.Gold,
+	rank = C.Green,
+	deposit = C.Gold,
+	upgrade = C.Cyan,
+	pet = C.Pink,
+	story = Color3.fromRGB(235, 210, 160),
+	shadow = C.Violet,
+	victory = C.Green,
+}
+
+------------------------------------------------------------------------
+-- Помощники
+------------------------------------------------------------------------
+local function new(className, props, children)
+	local inst = Instance.new(className)
+	local parent = nil
+	if props then
+		for k, v in pairs(props) do
+			if k == "Parent" then
+				parent = v
+			else
+				inst[k] = v
+			end
+		end
+	end
+	if children then
+		for _, child in ipairs(children) do
+			child.Parent = inst
+		end
+	end
+	if parent then
+		inst.Parent = parent
+	end
+	return inst
+end
+
+local function corner(radius)
+	return new("UICorner", { CornerRadius = UDim.new(0, radius or 14) })
+end
+
+local function stroke(color, thickness, transparency)
+	return new("UIStroke", {
+		Color = color,
+		Thickness = thickness or 2,
+		Transparency = transparency or 0,
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+	})
+end
+
+local function textStroke(color, thickness)
+	return new("UIStroke", { Color = color or C.Night, Thickness = thickness or 1.5, Transparency = 0.2 })
+end
+
+local function gradient(c1, c2, rotation)
+	return new("UIGradient", { Color = ColorSequence.new(c1, c2), Rotation = rotation or 90 })
+end
+
+local function padding(px)
+	return new("UIPadding", {
+		PaddingTop = UDim.new(0, px),
+		PaddingBottom = UDim.new(0, px),
+		PaddingLeft = UDim.new(0, px),
+		PaddingRight = UDim.new(0, px),
+	})
+end
+
+local function label(props)
+	local defaults = {
+		BackgroundTransparency = 1,
+		Font = Enum.Font.FredokaOne,
+		TextColor3 = C.Text,
+		TextSize = 18,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Text = "",
+	}
+	for k, v in pairs(props) do
+		defaults[k] = v
+	end
+	return new("TextLabel", defaults)
+end
+
+local function tween(inst, time, props, style, direction)
+	local t = TweenService:Create(inst, TweenInfo.new(time, style or Enum.EasingStyle.Quad, direction or Enum.EasingDirection.Out), props)
+	t:Play()
+	return t
+end
+
+local function formatNumber(n)
+	n = math.floor(n or 0)
+	if n >= 1000000 then
+		return string.format("%.2fM", n / 1000000)
+	elseif n >= 10000 then
+		return string.format("%.1fK", n / 1000)
+	end
+	local s = tostring(n)
+	local formatted = s:reverse():gsub("(%d%d%d)", "%1 "):reverse()
+	return (formatted:gsub("^ ", ""))
+end
+UI.FormatNumber = formatNumber
+
+local function formatTime(seconds)
+	seconds = math.max(0, math.floor(seconds))
+	return string.format("%d:%02d", math.floor(seconds / 60), seconds % 60)
+end
+
+-- Кнопка с градиентом и «пружинкой» при наведении/нажатии.
+local function button(props)
+	local c1 = props.Color1 or C.Gold
+	local c2 = props.Color2 or C.Gold2
+	local btn = new("TextButton", {
+		Name = props.Name or "Button",
+		Size = props.Size or UDim2.fromOffset(140, 44),
+		Position = props.Position or UDim2.new(),
+		AnchorPoint = props.AnchorPoint or Vector2.new(),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		AutoButtonColor = false,
+		Font = Enum.Font.FredokaOne,
+		Text = props.Text or "",
+		TextSize = props.TextSize or 20,
+		TextColor3 = props.TextColor or C.Night,
+		LayoutOrder = props.LayoutOrder or 0,
+		Parent = props.Parent,
+	}, {
+		corner(props.Radius or 12),
+		gradient(c1, c2, 90),
+		stroke(Color3.new(1, 1, 1), 1.5, 0.6),
+	})
+	local scale = new("UIScale", { Parent = btn })
+	btn.MouseEnter:Connect(function()
+		tween(scale, 0.12, { Scale = 1.06 })
+	end)
+	btn.MouseLeave:Connect(function()
+		tween(scale, 0.12, { Scale = 1 })
+	end)
+	btn.MouseButton1Down:Connect(function()
+		tween(scale, 0.06, { Scale = 0.94 })
+	end)
+	btn.MouseButton1Up:Connect(function()
+		tween(scale, 0.15, { Scale = 1.04 }, Enum.EasingStyle.Back)
+	end)
+	btn.Activated:Connect(function()
+		Sound.Play("Click")
+	end)
+	return btn
+end
+
+local function setButtonColors(btn, c1, c2)
+	local g = btn:FindFirstChildOfClass("UIGradient")
+	if g then
+		g.Color = ColorSequence.new(c1, c2)
+	end
+end
+
+local function progressBar(parent, props)
+	local back = new("Frame", {
+		Name = props.Name or "Bar",
+		Size = props.Size,
+		Position = props.Position or UDim2.new(),
+		AnchorPoint = props.AnchorPoint or Vector2.new(),
+		BackgroundColor3 = Color3.fromRGB(10, 8, 28),
+		BackgroundTransparency = 0.2,
+		Parent = parent,
+	}, { corner(8) })
+	local fill = new("Frame", {
+		Name = "Fill",
+		Size = UDim2.fromScale(0, 1),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		Parent = back,
+	}, { corner(8), gradient(props.Color1 or C.Cyan, props.Color2 or C.Pink, 0) })
+	local text = label({
+		Name = "Label",
+		Size = UDim2.fromScale(1, 1),
+		TextXAlignment = Enum.TextXAlignment.Center,
+		TextSize = props.TextSize or 13,
+		ZIndex = 3,
+		Parent = back,
+	}, nil)
+	textStroke(C.Night, 1.2).Parent = text
+	return back, fill, text
+end
+
+local function setProgress(fill, ratio)
+	ratio = math.clamp(ratio or 0, 0, 1)
+	tween(fill, 0.35, { Size = UDim2.fromScale(ratio, 1) })
+end
+
+------------------------------------------------------------------------
+-- Состояние
+------------------------------------------------------------------------
+local ps = nil -- состояние игрока с сервера
+local ws = nil -- состояние мира
+local send = function() end
+local gui, scaleObj
+local hud = {}
+local shop = {}
+local deposit = {}
+local dialogue = {}
+local toastHolder
+local bannerHolder
+local displayedLight = 0
+local lightTweenValue
+
+------------------------------------------------------------------------
+-- HUD
+------------------------------------------------------------------------
+local function buildHud()
+	-- Свет
+	local lightPill = new("Frame", {
+		Name = "LightPill",
+		Size = UDim2.fromOffset(250, 62),
+		Position = UDim2.fromOffset(16, 16),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		Parent = gui,
+	}, { corner(18), gradient(C.Panel2, C.Night, 90), stroke(C.Gold, 2, 0.15) })
+	local star = label({
+		Name = "Star",
+		Text = "✦",
+		Size = UDim2.fromOffset(54, 62),
+		TextSize = 40,
+		TextColor3 = C.Gold,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		Parent = lightPill,
+	})
+	new("UIGradient", { Color = ColorSequence.new(C.Gold, C.Pink), Rotation = 45, Parent = star })
+	hud.lightLabel = label({
+		Name = "Amount",
+		Text = "0",
+		Position = UDim2.fromOffset(54, 4),
+		Size = UDim2.new(1, -62, 0, 36),
+		TextSize = 32,
+		Parent = lightPill,
+	})
+	textStroke(C.Night, 2).Parent = hud.lightLabel
+	hud.multLabel = label({
+		Name = "Mult",
+		Text = "звёздный свет · x1.00",
+		Position = UDim2.fromOffset(56, 38),
+		Size = UDim2.new(1, -62, 0, 18),
+		TextSize = 14,
+		TextColor3 = C.Cyan,
+		Font = Enum.Font.GothamBold,
+		Parent = lightPill,
+	})
+	hud.lightPill = lightPill
+	hud.lightScale = new("UIScale", { Parent = lightPill })
+
+	-- Ранг
+	local rankPanel = new("Frame", {
+		Name = "RankPanel",
+		Size = UDim2.fromOffset(250, 52),
+		Position = UDim2.fromOffset(16, 86),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		Parent = gui,
+	}, { corner(14), gradient(C.Panel, C.Night, 90), stroke(C.Cyan, 1.5, 0.5) })
+	hud.rankLabel = label({
+		Name = "Rank",
+		Text = "Новичок",
+		Position = UDim2.fromOffset(12, 4),
+		Size = UDim2.new(1, -24, 0, 22),
+		TextSize = 18,
+		TextColor3 = C.Green,
+		Parent = rankPanel,
+	})
+	local _, xpFill, xpText = progressBar(rankPanel, {
+		Size = UDim2.new(1, -24, 0, 16),
+		Position = UDim2.fromOffset(12, 28),
+		Color1 = C.Green,
+		Color2 = C.Cyan,
+		TextSize = 12,
+	})
+	hud.xpFill = xpFill
+	hud.xpText = xpText
+
+	-- Маяк (сверху по центру)
+	local lighthouse = new("Frame", {
+		Name = "Lighthouse",
+		Size = UDim2.fromOffset(380, 58),
+		Position = UDim2.new(0.5, 0, 0, 12),
+		AnchorPoint = Vector2.new(0.5, 0),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		Parent = gui,
+	}, { corner(16), gradient(C.Panel2, C.Night, 90), stroke(C.Gold, 1.5, 0.4) })
+	hud.lighthouseLabel = label({
+		Text = "🗼 МАЯК · уровень 1",
+		Position = UDim2.fromOffset(0, 4),
+		Size = UDim2.new(1, 0, 0, 24),
+		TextXAlignment = Enum.TextXAlignment.Center,
+		TextSize = 19,
+		TextColor3 = C.Gold,
+		Parent = lighthouse,
+	})
+	textStroke(C.Night, 1.5).Parent = hud.lighthouseLabel
+	local _, lhFill, lhText = progressBar(lighthouse, {
+		Size = UDim2.new(1, -28, 0, 18),
+		Position = UDim2.fromOffset(14, 32),
+		Color1 = C.Gold,
+		Color2 = Color3.fromRGB(255, 250, 220),
+	})
+	hud.lhFill = lhFill
+	hud.lhText = lhText
+
+	-- Бусты (под Маяком)
+	hud.boostRow = new("Frame", {
+		Name = "Boosts",
+		Size = UDim2.fromOffset(420, 30),
+		Position = UDim2.new(0.5, 0, 0, 76),
+		AnchorPoint = Vector2.new(0.5, 0),
+		BackgroundTransparency = 1,
+		Parent = gui,
+	}, {
+		new("UIListLayout", {
+			FillDirection = Enum.FillDirection.Horizontal,
+			HorizontalAlignment = Enum.HorizontalAlignment.Center,
+			Padding = UDim.new(0, 8),
+		}),
+	})
+	local function chip(name, c1, c2)
+		local f = new("Frame", {
+			Name = name,
+			Size = UDim2.fromOffset(200, 28),
+			BackgroundColor3 = Color3.new(1, 1, 1),
+			Visible = false,
+			Parent = hud.boostRow,
+		}, { corner(14), gradient(c1, c2, 0) })
+		local l = label({
+			Size = UDim2.fromScale(1, 1),
+			TextXAlignment = Enum.TextXAlignment.Center,
+			TextSize = 14,
+			TextColor3 = C.Night,
+			Parent = f,
+		})
+		return f, l
+	end
+	hud.globalChip, hud.globalChipText = chip("Global", C.Gold, C.Gold2)
+	hud.victoryChip, hud.victoryChipText = chip("Victory", C.Green, C.Cyan)
+
+	-- Событие Тени
+	local shadow = new("Frame", {
+		Name = "ShadowEvent",
+		Size = UDim2.fromOffset(440, 74),
+		Position = UDim2.new(0.5, 0, 0, 112),
+		AnchorPoint = Vector2.new(0.5, 0),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		Visible = false,
+		Parent = gui,
+	}, { corner(16), gradient(Color3.fromRGB(70, 20, 110), Color3.fromRGB(15, 5, 25), 90), stroke(C.Violet, 2, 0) })
+	hud.shadowTitle = label({
+		Text = "🌑 ТЕНЬ НАСТУПАЕТ!",
+		Position = UDim2.fromOffset(0, 6),
+		Size = UDim2.new(1, 0, 0, 26),
+		TextXAlignment = Enum.TextXAlignment.Center,
+		TextSize = 22,
+		TextColor3 = Color3.fromRGB(230, 200, 255),
+		Parent = shadow,
+	})
+	textStroke(Color3.new(0, 0, 0), 2).Parent = hud.shadowTitle
+	local _, shFill, shText = progressBar(shadow, {
+		Size = UDim2.new(1, -28, 0, 22),
+		Position = UDim2.fromOffset(14, 40),
+		Color1 = C.Violet,
+		Color2 = C.Gold,
+		TextSize = 14,
+	})
+	hud.shadowFill = shFill
+	hud.shadowText = shText
+	hud.shadow = shadow
+	hud.shadowStroke = shadow:FindFirstChildOfClass("UIStroke")
+
+	-- Боковые кнопки
+	local side = new("Frame", {
+		Name = "SideButtons",
+		Size = UDim2.fromOffset(84, 330),
+		Position = UDim2.new(0, 16, 0.5, 0),
+		AnchorPoint = Vector2.new(0, 0.5),
+		BackgroundTransparency = 1,
+		Parent = gui,
+	}, {
+		new("UIListLayout", { Padding = UDim.new(0, 10), SortOrder = Enum.SortOrder.LayoutOrder }),
+	})
+	local function sideButton(order, icon, text, c1, c2, onClick)
+		local b = button({
+			Name = text,
+			Size = UDim2.fromOffset(78, 74),
+			Color1 = c1,
+			Color2 = c2,
+			Text = "",
+			Radius = 18,
+			LayoutOrder = order,
+			Parent = side,
+		})
+		label({
+			Text = icon,
+			Size = UDim2.new(1, 0, 0, 44),
+			Position = UDim2.fromOffset(0, 4),
+			TextSize = 32,
+			TextXAlignment = Enum.TextXAlignment.Center,
+			Parent = b,
+		})
+		local t = label({
+			Text = text,
+			Size = UDim2.new(1, 0, 0, 20),
+			Position = UDim2.fromOffset(0, 48),
+			TextSize = 14,
+			TextColor3 = C.Text,
+			TextXAlignment = Enum.TextXAlignment.Center,
+			Parent = b,
+		})
+		textStroke(C.Night, 1.5).Parent = t
+		b.Activated:Connect(onClick)
+		return b
+	end
+	sideButton(1, "🛒", "Магазин", C.Cyan, Color3.fromRGB(60, 120, 255), function()
+		UI.OpenShop("Upgrades")
+	end)
+	sideButton(2, "✨", "Духи", C.Pink, C.Violet, function()
+		UI.OpenShop("Pets")
+	end)
+	local donate = sideButton(3, "💎", "Донат", C.Gold, C.Gold2, function()
+		UI.OpenShop("Donate")
+	end)
+	-- кнопка доната мягко «дышит», чтобы её замечали
+	task.spawn(function()
+		local s = donate:FindFirstChildOfClass("UIScale")
+		while donate.Parent do
+			if s and s.Scale == 1 then
+				tween(s, 0.6, { Scale = 1.05 }, Enum.EasingStyle.Sine)
+				task.wait(0.6)
+				tween(s, 0.6, { Scale = 1 }, Enum.EasingStyle.Sine)
+			end
+			task.wait(1.6)
+		end
+	end)
+	sideButton(4, "🏠", "Домой", C.Panel2, C.Night, function()
+		send("ReturnToHub")
+	end)
+end
+
+------------------------------------------------------------------------
+-- Окна (общая рамка)
+------------------------------------------------------------------------
+local openWindow = nil
+
+local function makeWindow(name, size, title, accent)
+	local overlay = new("TextButton", {
+		Name = name .. "Overlay",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundColor3 = Color3.new(0, 0, 0),
+		BackgroundTransparency = 1,
+		Text = "",
+		AutoButtonColor = false,
+		Visible = false,
+		ZIndex = 20,
+		Parent = gui,
+	})
+	local window = new("Frame", {
+		Name = name,
+		Size = size,
+		Position = UDim2.fromScale(0.5, 0.5),
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		ZIndex = 21,
+		Parent = overlay,
+	}, { corner(22), gradient(C.Panel2, C.Night, 90), stroke(accent or C.Gold, 2.5, 0.1) })
+	local winScale = new("UIScale", { Parent = window })
+	local titleLabel = label({
+		Name = "Title",
+		Text = title,
+		Size = UDim2.new(1, -80, 0, 44),
+		Position = UDim2.fromOffset(22, 10),
+		TextSize = 30,
+		TextColor3 = accent or C.Gold,
+		ZIndex = 22,
+		Parent = window,
+	})
+	textStroke(C.Night, 2).Parent = titleLabel
+	local close = button({
+		Name = "Close",
+		Text = "✕",
+		Size = UDim2.fromOffset(44, 44),
+		Position = UDim2.new(1, -14, 0, 12),
+		AnchorPoint = Vector2.new(1, 0),
+		Color1 = C.Red,
+		Color2 = Color3.fromRGB(190, 50, 90),
+		TextColor = C.Text,
+		Parent = window,
+	})
+	close.ZIndex = 22
+
+	local obj = { overlay = overlay, window = window, scale = winScale, title = titleLabel }
+	local function hide()
+		UI.CloseWindow(obj)
+	end
+	close.Activated:Connect(hide)
+	overlay.Activated:Connect(hide)
+	-- клики по самому окну не закрывают его
+	new("TextButton", {
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		Text = "",
+		ZIndex = 21,
+		Parent = window,
+	})
+	return obj
+end
+
+function UI.OpenWindow(obj)
+	if openWindow and openWindow ~= obj then
+		UI.CloseWindow(openWindow, true)
+	end
+	openWindow = obj
+	obj.overlay.Visible = true
+	obj.overlay.BackgroundTransparency = 1
+	obj.scale.Scale = 0.75
+	tween(obj.overlay, 0.2, { BackgroundTransparency = 0.45 })
+	tween(obj.scale, 0.35, { Scale = 1 }, Enum.EasingStyle.Back)
+end
+
+function UI.CloseWindow(obj, instant)
+	if openWindow == obj then
+		openWindow = nil
+	end
+	if instant then
+		obj.overlay.Visible = false
+		return
+	end
+	tween(obj.overlay, 0.15, { BackgroundTransparency = 1 })
+	local t = tween(obj.scale, 0.15, { Scale = 0.8 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+	t.Completed:Connect(function()
+		if openWindow ~= obj then
+			obj.overlay.Visible = false
+		end
+	end)
+end
+
+------------------------------------------------------------------------
+-- Магазин
+------------------------------------------------------------------------
+local function card(parent, order, accent)
+	return new("Frame", {
+		Size = UDim2.new(1, -8, 0, 96),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		LayoutOrder = order,
+		ZIndex = 23,
+		Parent = parent,
+	}, { corner(16), gradient(C.Panel, Color3.fromRGB(22, 18, 52), 0), stroke(accent, 1.5, 0.45) })
+end
+
+local function cardIcon(parent, icon, color)
+	local holder = new("Frame", {
+		Size = UDim2.fromOffset(72, 72),
+		Position = UDim2.fromOffset(12, 12),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		ZIndex = 24,
+		Parent = parent,
+	}, { corner(36), gradient(color, C.Night, 135) })
+	label({
+		Text = icon,
+		Size = UDim2.fromScale(1, 1),
+		TextSize = 38,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		ZIndex = 25,
+		Parent = holder,
+	})
+end
+
+local function cardText(parent, title, titleColor, subtitle, extra)
+	local t = label({
+		Text = title,
+		Position = UDim2.fromOffset(98, 10),
+		Size = UDim2.new(1, -270, 0, 26),
+		TextSize = 21,
+		TextColor3 = titleColor or C.Text,
+		ZIndex = 24,
+		Parent = parent,
+	})
+	textStroke(C.Night, 1.5).Parent = t
+	label({
+		Text = subtitle,
+		Position = UDim2.fromOffset(98, 36),
+		Size = UDim2.new(1, -270, 0, 34),
+		TextSize = 14,
+		TextWrapped = true,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		TextColor3 = C.Muted,
+		Font = Enum.Font.GothamMedium,
+		ZIndex = 24,
+		Parent = parent,
+	})
+	if extra then
+		label({
+			Text = extra,
+			Position = UDim2.fromOffset(98, 70),
+			Size = UDim2.new(1, -270, 0, 18),
+			TextSize = 13,
+			TextColor3 = C.Cyan,
+			Font = Enum.Font.GothamBold,
+			ZIndex = 24,
+			Parent = parent,
+		})
+	end
+end
+
+local function cardButton(parent, text, c1, c2, textColor, onClick)
+	local b = button({
+		Text = text,
+		Size = UDim2.fromOffset(150, 48),
+		Position = UDim2.new(1, -14, 0.5, 0),
+		AnchorPoint = Vector2.new(1, 0.5),
+		Color1 = c1,
+		Color2 = c2,
+		TextColor = textColor or C.Night,
+		TextSize = 18,
+		Parent = parent,
+	})
+	b.ZIndex = 25
+	b.Activated:Connect(onClick)
+	return b
+end
+
+local function clearList(list)
+	for _, child in ipairs(list:GetChildren()) do
+		if child:IsA("GuiObject") then
+			child:Destroy()
+		end
+	end
+end
+
+local function renderUpgrades(list)
+	for order, id in ipairs(Config.UpgradeOrder) do
+		local def = Config.Upgrades[id]
+		local level = ps and ps.upgrades[id] or 0
+		local maxed = level >= def.maxLevel
+		local cost = Config.GetUpgradeCost(id, level)
+		local c = card(list, order, C.Cyan)
+		cardIcon(c, def.icon, C.Cyan)
+		local effect
+		if id == "Radius" then
+			effect = "Сейчас: радиус " .. string.format("%.1f", ps and ps.radius or Config.Light.BasePickupRadius)
+		else
+			effect = "Сейчас: скорость " .. string.format("%.1f", 16 + level * def.perLevel)
+		end
+		cardText(c, def.name .. "  ·  " .. level .. "/" .. def.maxLevel, C.Text, def.description, effect)
+		if maxed then
+			cardButton(c, "МАКС ✓", C.Green, C.Cyan, C.Night, function() end)
+		else
+			local canAfford = ps and ps.light >= cost
+			local b = cardButton(c, formatNumber(cost) .. " ✦", C.Gold, C.Gold2, C.Night, function()
+				send("BuyUpgrade", id)
+			end)
+			if not canAfford then
+				setButtonColors(b, Color3.fromRGB(110, 100, 150), Color3.fromRGB(70, 60, 110))
+				b.TextColor3 = C.Text
+			end
+		end
+	end
+end
+
+local function isEquipped(petId)
+	if not ps then
+		return false
+	end
+	for _, id in ipairs(ps.equipped) do
+		if id == petId then
+			return true
+		end
+	end
+	return false
+end
+
+local function renderPets(list)
+	local equippedCount = ps and #ps.equipped or 0
+	local slots = ps and ps.slots or Config.BaseEquipSlots
+	local info = label({
+		Text = "Призвано духов: " .. equippedCount .. " / " .. slots .. (slots < Config.PassEquipSlots and "   ·   хочешь больше? загляни в Донат" or ""),
+		Size = UDim2.new(1, -8, 0, 24),
+		TextSize = 15,
+		TextColor3 = C.Muted,
+		Font = Enum.Font.GothamBold,
+		LayoutOrder = 0,
+		ZIndex = 24,
+		Parent = list,
+	})
+	info.TextXAlignment = Enum.TextXAlignment.Center
+	for _, pet in ipairs(Config.Pets) do
+		local owned = ps and ps.pets[pet.id]
+		local c = card(list, pet.order, pet.rarityColor)
+		cardIcon(c, pet.style == "phoenix" and "🌈" or (pet.style == "fox" and "🦊" or (pet.style == "jelly" and "🌙" or "🌟")), pet.glow)
+		cardText(c, pet.name, pet.rarityColor, pet.rarity .. " · " .. pet.description,
+			"+" .. math.floor(pet.lightBonus * 100) .. "% света  ·  +" .. pet.radiusBonus .. " радиус")
+		if owned then
+			if isEquipped(pet.id) then
+				cardButton(c, "Убрать", C.Panel2, C.Night, C.Text, function()
+					send("EquipPet", pet.id)
+				end)
+			else
+				cardButton(c, "Призвать", C.Green, C.Cyan, C.Night, function()
+					send("EquipPet", pet.id)
+				end)
+			end
+		elseif pet.currency == "Robux" then
+			local product = Config.Products[pet.productKey]
+			cardButton(c, "💎 " .. (product and product.priceText or "R$"), C.Gold, C.Pink, C.Night, function()
+				send("PromptProduct", pet.productKey)
+			end)
+		else
+			local b = cardButton(c, formatNumber(pet.price) .. " ✦", C.Gold, C.Gold2, C.Night, function()
+				send("BuyPet", pet.id)
+			end)
+			if not ps or ps.light < pet.price then
+				setButtonColors(b, Color3.fromRGB(110, 100, 150), Color3.fromRGB(70, 60, 110))
+				b.TextColor3 = C.Text
+			end
+		end
+	end
+end
+
+local function renderDonate(list)
+	local header1 = label({
+		Text = "👑 Навсегда (геймпассы)",
+		Size = UDim2.new(1, -8, 0, 28),
+		TextSize = 20,
+		TextColor3 = C.Gold,
+		LayoutOrder = 0,
+		ZIndex = 24,
+		Parent = list,
+	})
+	textStroke(C.Night, 1.5).Parent = header1
+	for order, key in ipairs(Config.PassOrder) do
+		local def = Config.Passes[key]
+		local owned = ps and ps.passes[key]
+		local c = card(list, order, C.Gold)
+		cardIcon(c, def.icon, C.Gold)
+		cardText(c, def.name, C.Gold, def.description)
+		if owned then
+			cardButton(c, "Куплено ✓", C.Green, C.Cyan, C.Night, function() end)
+		else
+			cardButton(c, def.priceText, C.Gold, C.Gold2, C.Night, function()
+				send("PromptPass", key)
+			end)
+		end
+	end
+	local header2 = label({
+		Text = "✦ Свет и бусты",
+		Size = UDim2.new(1, -8, 0, 28),
+		TextSize = 20,
+		TextColor3 = C.Cyan,
+		LayoutOrder = 10,
+		ZIndex = 24,
+		Parent = list,
+	})
+	textStroke(C.Night, 1.5).Parent = header2
+	for order, key in ipairs(Config.ProductOrder) do
+		local def = Config.Products[key]
+		local c = card(list, 10 + order, def.pet and C.Pink or C.Cyan)
+		cardIcon(c, def.icon, def.pet and C.Pink or C.Cyan)
+		cardText(c, def.name, C.Text, def.description)
+		local ownedPet = def.pet and ps and ps.pets[def.pet]
+		if ownedPet then
+			cardButton(c, "Уже твой ✓", C.Green, C.Cyan, C.Night, function() end)
+		else
+			cardButton(c, def.priceText, C.Gold, C.Pink, C.Night, function()
+				send("PromptProduct", key)
+			end)
+		end
+	end
+	local footer = label({
+		Text = "Покупки поддерживают разработчика и помогают Маяку гореть ✦",
+		Size = UDim2.new(1, -8, 0, 24),
+		TextSize = 13,
+		TextColor3 = C.Muted,
+		Font = Enum.Font.GothamMedium,
+		LayoutOrder = 100,
+		ZIndex = 24,
+		Parent = list,
+	})
+	footer.TextXAlignment = Enum.TextXAlignment.Center
+end
+
+local TABS = {
+	{ id = "Upgrades", text = "🛒 Улучшения", render = renderUpgrades, accent = C.Cyan },
+	{ id = "Pets", text = "✨ Духи", render = renderPets, accent = C.Pink },
+	{ id = "Donate", text = "💎 Донат", render = renderDonate, accent = C.Gold },
+}
+
+local function buildShop()
+	local obj = makeWindow("Shop", UDim2.fromOffset(680, 470), "Магазин Смотрителя", C.Gold)
+	shop.obj = obj
+	shop.tab = "Upgrades"
+	shop.tabButtons = {}
+
+	local tabsRow = new("Frame", {
+		Size = UDim2.new(1, -44, 0, 44),
+		Position = UDim2.fromOffset(22, 62),
+		BackgroundTransparency = 1,
+		ZIndex = 22,
+		Parent = obj.window,
+	}, {
+		new("UIListLayout", {
+			FillDirection = Enum.FillDirection.Horizontal,
+			Padding = UDim.new(0, 10),
+		}),
+	})
+	for _, tab in ipairs(TABS) do
+		local b = button({
+			Text = tab.text,
+			Size = UDim2.fromOffset(200, 42),
+			Color1 = C.Panel2,
+			Color2 = C.Panel,
+			TextColor = C.Text,
+			TextSize = 18,
+			Parent = tabsRow,
+		})
+		b.ZIndex = 23
+		b.Activated:Connect(function()
+			UI.OpenShop(tab.id)
+		end)
+		shop.tabButtons[tab.id] = b
+	end
+
+	shop.list = new("ScrollingFrame", {
+		Size = UDim2.new(1, -36, 1, -128),
+		Position = UDim2.fromOffset(22, 116),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 6,
+		ScrollBarImageColor3 = C.Gold,
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		ZIndex = 23,
+		Parent = obj.window,
+	}, {
+		new("UIListLayout", { Padding = UDim.new(0, 10), SortOrder = Enum.SortOrder.LayoutOrder }),
+		new("UIPadding", { PaddingTop = UDim.new(0, 4), PaddingBottom = UDim.new(0, 8), PaddingLeft = UDim.new(0, 4) }),
+	})
+end
+
+local function renderShop()
+	if not shop.obj or openWindow ~= shop.obj then
+		return
+	end
+	local scroll = shop.list.CanvasPosition
+	clearList(shop.list)
+	for _, tab in ipairs(TABS) do
+		local b = shop.tabButtons[tab.id]
+		if tab.id == shop.tab then
+			setButtonColors(b, tab.accent, C.Panel2)
+			b.TextColor3 = C.Night
+			shop.obj.title.TextColor3 = tab.accent
+			tab.render(shop.list)
+		else
+			setButtonColors(b, C.Panel2, C.Panel)
+			b.TextColor3 = C.Text
+		end
+	end
+	shop.list.CanvasPosition = scroll
+end
+
+function UI.OpenShop(tabId)
+	local changed = shop.tab ~= tabId
+	shop.tab = tabId or shop.tab
+	if openWindow ~= shop.obj then
+		UI.OpenWindow(shop.obj)
+		shop.list.CanvasPosition = Vector2.zero
+	elseif changed then
+		shop.list.CanvasPosition = Vector2.zero
+	end
+	renderShop()
+end
+
+------------------------------------------------------------------------
+-- Окно вклада в Маяк
+------------------------------------------------------------------------
+local function buildDeposit()
+	local obj = makeWindow("Deposit", UDim2.fromOffset(460, 280), "🗼 Отдать свет Маяку", C.Gold)
+	deposit.obj = obj
+	deposit.info = label({
+		Text = "",
+		Position = UDim2.fromOffset(24, 62),
+		Size = UDim2.new(1, -48, 0, 70),
+		TextSize = 16,
+		TextWrapped = true,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		Font = Enum.Font.GothamMedium,
+		TextColor3 = C.Muted,
+		RichText = true,
+		ZIndex = 23,
+		Parent = obj.window,
+	})
+	local row = new("Frame", {
+		Size = UDim2.new(1, -48, 0, 60),
+		Position = UDim2.new(0, 24, 1, -84),
+		BackgroundTransparency = 1,
+		ZIndex = 22,
+		Parent = obj.window,
+	}, {
+		new("UIListLayout", {
+			FillDirection = Enum.FillDirection.Horizontal,
+			HorizontalAlignment = Enum.HorizontalAlignment.Center,
+			Padding = UDim.new(0, 12),
+		}),
+	})
+	local options = { { 0.25, "25%" }, { 0.5, "50%" }, { 1, "ВСЁ 🔥" } }
+	for i, option in ipairs(options) do
+		local b = button({
+			Text = option[2],
+			Size = UDim2.fromOffset(124, 56),
+			Color1 = i == 3 and C.Gold or C.Cyan,
+			Color2 = i == 3 and C.Gold2 or Color3.fromRGB(60, 120, 255),
+			TextSize = 22,
+			LayoutOrder = i,
+			Parent = row,
+		})
+		b.ZIndex = 23
+		b.Activated:Connect(function()
+			send("Deposit", option[1])
+			UI.CloseWindow(obj)
+		end)
+	end
+end
+
+local function renderDeposit()
+	if not deposit.info or not ps then
+		return
+	end
+	deposit.info.Text = "У тебя <font color=\"#FFD36B\"><b>" .. formatNumber(ps.light) .. " ✦</b></font>. "
+		.. "Сколько света отдать огню? Ты получишь столько же <b>опыта Смотрителя</b> — каждый новый ранг навсегда даёт <font color=\"#6EF0A0\"><b>+" .. math.floor(Config.RankBonus * 100) .. "% света</b></font>."
+end
+
+function UI.OpenDeposit()
+	renderDeposit()
+	UI.OpenWindow(deposit.obj)
+end
+
+------------------------------------------------------------------------
+-- Диалоги
+------------------------------------------------------------------------
+local DIALOGUE_STYLES = {
+	default = { c1 = C.Panel2, c2 = C.Night, accent = C.Gold, name = C.Gold },
+	note = { c1 = Color3.fromRGB(95, 70, 45), c2 = Color3.fromRGB(45, 30, 20), accent = Color3.fromRGB(235, 205, 150), name = Color3.fromRGB(255, 225, 170) },
+	shadow = { c1 = Color3.fromRGB(60, 15, 90), c2 = Color3.fromRGB(10, 0, 20), accent = C.Violet, name = Color3.fromRGB(220, 180, 255) },
+}
+
+local function buildDialogue()
+	local box = new("TextButton", {
+		Name = "Dialogue",
+		Size = UDim2.fromOffset(760, 170),
+		Position = UDim2.new(0.5, 0, 1, -24),
+		AnchorPoint = Vector2.new(0.5, 1),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		AutoButtonColor = false,
+		Text = "",
+		Visible = false,
+		ZIndex = 40,
+		Parent = gui,
+	}, { corner(22) })
+	dialogue.gradient = gradient(C.Panel2, C.Night, 90)
+	dialogue.gradient.Parent = box
+	dialogue.stroke = stroke(C.Gold, 2.5, 0.1)
+	dialogue.stroke.Parent = box
+	dialogue.scale = new("UIScale", { Parent = box })
+
+	local nameTag = new("Frame", {
+		Size = UDim2.fromOffset(320, 40),
+		Position = UDim2.fromOffset(26, -20),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		ZIndex = 41,
+		Parent = box,
+	}, { corner(14), gradient(C.Gold, C.Gold2, 0) })
+	dialogue.nameTagGradient = nameTag:FindFirstChildOfClass("UIGradient")
+	dialogue.name = label({
+		Size = UDim2.new(1, -24, 1, 0),
+		Position = UDim2.fromOffset(12, 0),
+		TextSize = 20,
+		TextColor3 = C.Night,
+		ZIndex = 42,
+		Parent = nameTag,
+	})
+	dialogue.text = label({
+		Size = UDim2.new(1, -52, 1, -64),
+		Position = UDim2.fromOffset(26, 30),
+		TextSize = 20,
+		TextWrapped = true,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		Font = Enum.Font.GothamMedium,
+		ZIndex = 41,
+		Parent = box,
+	})
+	dialogue.hint = label({
+		Text = "Нажми, чтобы продолжить ▶",
+		Size = UDim2.new(1, -40, 0, 22),
+		Position = UDim2.new(0, 20, 1, -30),
+		TextSize = 14,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		TextColor3 = C.Muted,
+		Font = Enum.Font.GothamBold,
+		ZIndex = 41,
+		Parent = box,
+	})
+	dialogue.box = box
+	dialogue.queue = {}
+	dialogue.running = false
+	dialogue.advance = Instance.new("BindableEvent")
+	box.Activated:Connect(function()
+		dialogue.advance:Fire()
+	end)
+	UserInputService.InputBegan:Connect(function(input, processed)
+		if processed then
+			return
+		end
+		if dialogue.box.Visible and (input.KeyCode == Enum.KeyCode.Return or input.KeyCode == Enum.KeyCode.E) then
+			dialogue.advance:Fire()
+		end
+	end)
+end
+
+local function playDialogue(entry)
+	local style = DIALOGUE_STYLES[entry.style or "default"] or DIALOGUE_STYLES.default
+	dialogue.gradient.Color = ColorSequence.new(style.c1, style.c2)
+	dialogue.stroke.Color = style.accent
+	dialogue.nameTagGradient.Color = ColorSequence.new(style.name, style.accent)
+	dialogue.name.Text = entry.speaker or ""
+	local box = dialogue.box
+	box.Visible = true
+	dialogue.scale.Scale = 0.85
+	tween(dialogue.scale, 0.3, { Scale = 1 }, Enum.EasingStyle.Back)
+
+	for index, line in ipairs(entry.lines or {}) do
+		dialogue.text.Text = line
+		dialogue.text.MaxVisibleGraphemes = 0
+		dialogue.hint.Text = index < #entry.lines and "Нажми, чтобы продолжить ▶" or "Нажми, чтобы закрыть ✓"
+		local skipped = false
+		local conn = dialogue.advance.Event:Connect(function()
+			skipped = true
+		end)
+		local length = utf8.len(line) or #line
+		local shown = 0
+		while shown < length and not skipped do
+			shown = shown + 1
+			dialogue.text.MaxVisibleGraphemes = shown
+			task.wait(0.022)
+		end
+		conn:Disconnect()
+		dialogue.text.MaxVisibleGraphemes = -1
+		dialogue.advance.Event:Wait()
+	end
+	local t = tween(dialogue.scale, 0.15, { Scale = 0.85 })
+	t.Completed:Wait()
+	box.Visible = false
+end
+
+-- Показывает диалог (в очереди). Если передан done (BindableEvent) — сработает по окончании.
+function UI.ShowDialogue(entry, done)
+	table.insert(dialogue.queue, { entry = entry, done = done })
+	if dialogue.running then
+		return
+	end
+	dialogue.running = true
+	task.spawn(function()
+		while #dialogue.queue > 0 do
+			local item = table.remove(dialogue.queue, 1)
+			playDialogue(item.entry)
+			if item.done then
+				item.done:Fire()
+			end
+		end
+		dialogue.running = false
+	end)
+end
+
+function UI.ShowDialogueAsync(entry)
+	local done = Instance.new("BindableEvent")
+	UI.ShowDialogue(entry, done)
+	done.Event:Wait()
+	done:Destroy()
+end
+
+------------------------------------------------------------------------
+-- Уведомления и баннеры
+------------------------------------------------------------------------
+local function buildToasts()
+	toastHolder = new("Frame", {
+		Name = "Toasts",
+		Size = UDim2.fromOffset(340, 400),
+		Position = UDim2.new(1, -16, 0, 16),
+		AnchorPoint = Vector2.new(1, 0),
+		BackgroundTransparency = 1,
+		ZIndex = 50,
+		Parent = gui,
+	}, {
+		new("UIListLayout", {
+			Padding = UDim.new(0, 8),
+			HorizontalAlignment = Enum.HorizontalAlignment.Right,
+			SortOrder = Enum.SortOrder.LayoutOrder,
+		}),
+	})
+	bannerHolder = new("Frame", {
+		Name = "Banner",
+		Size = UDim2.fromOffset(700, 140),
+		Position = UDim2.fromScale(0.5, 0.32),
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		BackgroundTransparency = 1,
+		ZIndex = 60,
+		Parent = gui,
+	})
+end
+
+local toastCount = 0
+function UI.Notify(text, kind)
+	if not toastHolder then
+		return
+	end
+	toastCount = toastCount + 1
+	local color = KIND_COLORS[kind] or C.Cyan
+	local toast = new("Frame", {
+		Size = UDim2.fromOffset(340, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		LayoutOrder = toastCount,
+		ZIndex = 50,
+		Parent = toastHolder,
+	}, { corner(14), gradient(C.Panel2, C.Night, 90), stroke(color, 2, 0.1), padding(10) })
+	local stripe = new("Frame", {
+		Size = UDim2.new(0, 5, 1, 0),
+		BackgroundColor3 = color,
+		ZIndex = 51,
+		Parent = toast,
+	}, { corner(3) })
+	stripe.Position = UDim2.fromOffset(-4, 0)
+	local l = label({
+		Text = text,
+		Size = UDim2.new(1, -8, 0, 0),
+		Position = UDim2.fromOffset(8, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		TextSize = 16,
+		TextWrapped = true,
+		Font = Enum.Font.GothamBold,
+		ZIndex = 51,
+		Parent = toast,
+	})
+	l.TextColor3 = C.Text
+	local s = new("UIScale", { Scale = 0.6, Parent = toast })
+	tween(s, 0.3, { Scale = 1 }, Enum.EasingStyle.Back)
+	task.delay(4.5, function()
+		local t = tween(s, 0.25, { Scale = 0 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+		t.Completed:Wait()
+		toast:Destroy()
+	end)
+	-- не больше 5 уведомлений сразу
+	local toasts = {}
+	for _, child in ipairs(toastHolder:GetChildren()) do
+		if child:IsA("Frame") then
+			table.insert(toasts, child)
+		end
+	end
+	if #toasts > 5 then
+		table.sort(toasts, function(a, b)
+			return a.LayoutOrder < b.LayoutOrder
+		end)
+		toasts[1]:Destroy()
+	end
+end
+
+function UI.Banner(title, subtitle, color)
+	if not bannerHolder then
+		return
+	end
+	bannerHolder:ClearAllChildren()
+	local s = new("UIScale", { Scale = 0.3, Parent = bannerHolder })
+	local t = label({
+		Text = title,
+		Size = UDim2.new(1, 0, 0, 80),
+		TextSize = 64,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		TextColor3 = Color3.new(1, 1, 1),
+		ZIndex = 60,
+		Parent = bannerHolder,
+	})
+	new("UIGradient", { Color = ColorSequence.new(color or C.Gold, C.Pink), Rotation = 90, Parent = t })
+	textStroke(C.Night, 3).Parent = t
+	local st = label({
+		Text = subtitle or "",
+		Size = UDim2.new(1, 0, 0, 36),
+		Position = UDim2.fromOffset(0, 80),
+		TextSize = 26,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		TextColor3 = C.Text,
+		ZIndex = 60,
+		Parent = bannerHolder,
+	})
+	textStroke(C.Night, 2).Parent = st
+	tween(s, 0.45, { Scale = 1 }, Enum.EasingStyle.Back)
+	task.delay(2.6, function()
+		if s.Parent then
+			local out = tween(s, 0.3, { Scale = 0 }, Enum.EasingStyle.Back, Enum.EasingDirection.In)
+			out.Completed:Wait()
+			if s.Parent then
+				bannerHolder:ClearAllChildren()
+			end
+		end
+	end)
+end
+
+function UI.BumpLight()
+	if not hud.lightScale then
+		return
+	end
+	hud.lightScale.Scale = 1.08
+	tween(hud.lightScale, 0.25, { Scale = 1 }, Enum.EasingStyle.Back)
+end
+
+function UI.SetHudVisible(visible)
+	for _, name in ipairs({ "LightPill", "RankPanel", "Lighthouse", "Boosts", "SideButtons", "Toasts" }) do
+		local f = gui:FindFirstChild(name)
+		if f then
+			f.Visible = visible
+		end
+	end
+	if hud.shadow then
+		hud.shadow.Visible = visible and ws ~= nil and ws.shadow.active
+	end
+end
+
+------------------------------------------------------------------------
+-- Обновление от сервера
+------------------------------------------------------------------------
+local function renderHud()
+	if not ps then
+		return
+	end
+	-- плавный счётчик света
+	if lightTweenValue then
+		tween(lightTweenValue, 0.5, { Value = ps.light })
+	end
+	hud.multLabel.Text = "звёздный свет · x" .. string.format("%.2f", ps.multiplier)
+	hud.rankLabel.Text = "⭐ " .. ps.rankName
+	local rank = Config.Ranks[ps.rankIndex]
+	if rank then
+		hud.rankLabel.TextColor3 = rank.color
+	end
+	if ps.nextRankXp then
+		local ratio = (ps.keeperXp - ps.rankXp) / math.max(1, ps.nextRankXp - ps.rankXp)
+		setProgress(hud.xpFill, ratio)
+		hud.xpText.Text = formatNumber(ps.keeperXp) .. " / " .. formatNumber(ps.nextRankXp) .. " опыта"
+	else
+		setProgress(hud.xpFill, 1)
+		hud.xpText.Text = "Максимальный ранг!"
+	end
+end
+
+local function renderWorld()
+	if not ws then
+		return
+	end
+	hud.lighthouseLabel.Text = "🗼 МАЯК · уровень " .. ws.level .. (ws.level > 1 and ("  (+" .. math.floor((ws.level - 1) * Config.Lighthouse.BonusPerLevel * 100 + 0.5) .. "% всем)") or "")
+	if ws.nextThreshold then
+		local ratio = (ws.lighthouseTotal - ws.prevThreshold) / math.max(1, ws.nextThreshold - ws.prevThreshold)
+		setProgress(hud.lhFill, ratio)
+		hud.lhText.Text = formatNumber(ws.lighthouseTotal) .. " / " .. formatNumber(ws.nextThreshold) .. " ✦ до следующего уровня"
+	else
+		setProgress(hud.lhFill, 1)
+		hud.lhText.Text = "Маяк сияет в полную силу!"
+	end
+	local shadow = ws.shadow
+	local hudVisible = gui:FindFirstChild("LightPill") and gui.LightPill.Visible
+	hud.shadow.Visible = shadow.active and hudVisible
+	if shadow.active then
+		setProgress(hud.shadowFill, shadow.progress / math.max(1, shadow.goal))
+	end
+end
+
+function UI.SetPlayerState(state)
+	ps = state
+	renderHud()
+	renderShop()
+	if openWindow == deposit.obj then
+		renderDeposit()
+	end
+end
+
+function UI.SetWorldState(state)
+	ws = state
+	renderWorld()
+end
+
+function UI.GetPlayerState()
+	return ps
+end
+
+-- таймеры (обновляются 4 раза в секунду)
+local function timerLoop()
+	local acc = 0
+	RunService.Heartbeat:Connect(function(dt)
+		acc = acc + dt
+		if acc < 0.25 or not ws then
+			return
+		end
+		acc = 0
+		local now = workspace:GetServerTimeNow()
+		local g = ws.globalBoostUntil - now
+		hud.globalChip.Visible = g > 0
+		if g > 0 then
+			hud.globalChipText.Text = "🔥 x2 свет от " .. ws.globalBoostBy .. " · " .. formatTime(g)
+		end
+		local v = ws.shadowBoostUntil - now
+		hud.victoryChip.Visible = v > 0
+		if v > 0 then
+			hud.victoryChipText.Text = "☀️ Победа над Тенью · " .. formatTime(v)
+		end
+		if ws.shadow.active then
+			hud.shadowText.Text = formatNumber(ws.shadow.progress) .. " / " .. formatNumber(ws.shadow.goal) .. " ✦   ·   осталось " .. formatTime(ws.shadow.endsAt - now)
+			hud.shadowStroke.Transparency = 0.5 + math.sin(os.clock() * 6) * 0.5
+		end
+	end)
+end
+
+------------------------------------------------------------------------
+function UI.Init(options)
+	send = options.send
+	local playerGui = player:WaitForChild("PlayerGui")
+	gui = new("ScreenGui", {
+		Name = "LastLighthouseUI",
+		ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		IgnoreGuiInset = false,
+		Parent = playerGui,
+	})
+	UI.Gui = gui
+	scaleObj = new("UIScale", { Parent = gui })
+	local function rescale()
+		local camera = workspace.CurrentCamera
+		if not camera then
+			return
+		end
+		local vp = camera.ViewportSize
+		scaleObj.Scale = math.clamp(math.min(vp.X / 1150, vp.Y / 680), 0.5, 1.15)
+	end
+	rescale()
+	workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(rescale)
+
+	buildHud()
+	buildShop()
+	buildDeposit()
+	buildDialogue()
+	buildToasts()
+	timerLoop()
+
+	lightTweenValue = Instance.new("NumberValue")
+	lightTweenValue.Changed:Connect(function(value)
+		local shown = math.floor(value + 0.5)
+		if shown ~= displayedLight then
+			displayedLight = shown
+			hud.lightLabel.Text = formatNumber(shown)
+		end
+	end)
+end
+
+return UI
+]=] },
+}
+
+local function resolve(path)
+	local node = game
+	for part in string.gmatch(path, "[^%.]+") do
+		if node == game then
+			node = game:GetService(part)
+		else
+			node = node:FindFirstChild(part) or node:WaitForChild(part, 5)
+		end
+	end
+	return node
+end
+
+-- сохраняем ID доната из прошлой установки
+local preserved = {}
+for _, file in ipairs(FILES) do
+	if file.preserve then
+		local root = resolve(file.service)
+		local old = root:FindFirstChild("LastLighthouse") and root.LastLighthouse:FindFirstChild(file.name)
+		if old and old:IsA("LuaSourceContainer") then
+			preserved[file.name] = old.Source
+		end
+	end
+end
+
+-- удаляем старые папки игры
+for _, servicePath in ipairs({ "StarterPlayer.StarterPlayerScripts" }) do
+	local root = resolve(servicePath)
+	local old = root:FindFirstChild("LastLighthouse")
+	if old then
+		old:Destroy()
+	end
+end
+
+-- создаём скрипты
+local created = 0
+for _, file in ipairs(FILES) do
+	local root = resolve(file.service)
+	local folder = root:FindFirstChild("LastLighthouse")
+	if not folder then
+		folder = Instance.new("Folder")
+		folder.Name = "LastLighthouse"
+		folder.Parent = root
+	end
+	local script = Instance.new(file.class)
+	script.Name = file.name
+	script.Source = preserved[file.name] or file.source
+	script.Parent = folder
+	created = created + 1
+end
+print("[Маяк] Скриптов создано: " .. created)
+
+
+if recording then
+	pcall(function()
+		ChangeHistoryService:FinishRecording(recording, Enum.FinishRecordingOperation.Commit)
+	end)
+end
+
+end)
+
+if okInstall then
+	print("✦✦✦ УСТАНОВКА (ЧАСТЬ 2 из 3) ЗАВЕРШЕНА! Теперь вставь следующую часть. ✦✦✦")
+	print("Подсказки: включи Lighting → Technology = Future для лучшей графики; донат настраивается в ReplicatedStorage → LastLighthouse → MonetizationIds")
+else
+	warn("[Маяк] Ошибка установки: " .. tostring(installError))
+end

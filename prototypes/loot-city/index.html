@@ -1,0 +1,159 @@
+<!doctype html>
+<!-- PROTOTYPE - NOT FOR PRODUCTION -->
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loot City: Город возможностей</title>
+<style>
+:root { --glass: rgba(14,18,24,0.62); --line: rgba(255,255,255,0.12); --txt: #eef2f6; --dim: #9aa6b2; --acc: #ffb52e; --good: #5ee37a; --bad: #ff5a5a; }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: #000; color: var(--txt); font-family: "Segoe UI", "Inter", Roboto, Arial, sans-serif; user-select: none; }
+canvas#game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+.hidden { display: none !important; }
+#loading { position: fixed; inset: 0; background: radial-gradient(ellipse at 50% 30%, #1d2633, #07090c); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 50; }
+#loading h1 { font-size: 64px; margin: 0; letter-spacing: 2px; font-weight: 800; background: linear-gradient(180deg, #ffe39a, #ff9d2e); -webkit-background-clip: text; background-clip: text; color: transparent; text-shadow: 0 10px 40px rgba(255,160,40,0.25); }
+#loading h2 { margin: 6px 0 40px; font-weight: 400; color: var(--dim); letter-spacing: 6px; text-transform: uppercase; font-size: 16px; }
+.bar { width: 420px; max-width: 80vw; height: 6px; background: rgba(255,255,255,0.08); border-radius: 6px; overflow: hidden; }
+.bar > div { height: 100%; width: 0; background: linear-gradient(90deg, #ff9d2e, #ffe39a); transition: width .2s; }
+#loadmsg { margin-top: 14px; color: var(--dim); font-size: 13px; }
+#start { position: fixed; inset: 0; z-index: 40; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.45); backdrop-filter: blur(3px); }
+.card { background: var(--glass); border: 1px solid var(--line); border-radius: 18px; padding: 28px 34px; backdrop-filter: blur(14px); box-shadow: 0 20px 60px rgba(0,0,0,0.5); }
+#start .card { max-width: 640px; text-align: center; }
+#start h1 { margin: 0 0 4px; font-size: 44px; background: linear-gradient(180deg, #ffe39a, #ff9d2e); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.keys { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; text-align: left; margin: 18px auto; max-width: 420px; font-size: 14px; color: #cfd6de; }
+kbd { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-bottom-width: 3px; border-radius: 6px; padding: 1px 7px; font-family: inherit; font-size: 12px; color: #fff; }
+button { font-family: inherit; cursor: pointer; border: 1px solid rgba(255,255,255,0.18); background: rgba(255,255,255,0.08); color: var(--txt); border-radius: 10px; padding: 9px 16px; font-size: 14px; transition: background .15s, transform .05s; }
+button:hover { background: rgba(255,255,255,0.16); }
+button:active { transform: translateY(1px); }
+button.primary { background: linear-gradient(180deg, #ffc65a, #ff9d2e); color: #1b1206; border: none; font-weight: 700; }
+button.primary:hover { filter: brightness(1.08); }
+button:disabled { opacity: 0.4; cursor: default; }
+.big { font-size: 18px; padding: 14px 40px; border-radius: 14px; }
+/* HUD */
+#hud { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
+#tl { position: absolute; top: 18px; left: 18px; display: flex; flex-direction: column; gap: 8px; }
+.pill { background: var(--glass); border: 1px solid var(--line); border-radius: 12px; padding: 8px 14px; backdrop-filter: blur(10px); font-size: 14px; display: flex; align-items: center; gap: 10px; }
+#money { font-size: 26px; font-weight: 800; color: #ffe08a; letter-spacing: .5px; }
+#income { color: var(--good); font-size: 12px; }
+#minimap { position: absolute; top: 18px; right: 18px; width: 220px; height: 220px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.25); box-shadow: 0 8px 30px rgba(0,0,0,0.5); background: rgba(10,12,16,0.7); }
+#clock { position: absolute; top: 246px; right: 18px; width: 220px; text-align: center; }
+#prompt { position: absolute; bottom: 22%; left: 50%; transform: translateX(-50%); text-align: center; font-size: 16px; text-shadow: 0 2px 6px #000; }
+#prompt .name { font-size: 20px; font-weight: 700; }
+#cross { position: absolute; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px; border-radius: 50%; background: rgba(255,255,255,0.85); box-shadow: 0 0 4px #000; }
+#stam { position: absolute; bottom: 28px; left: 50%; transform: translateX(-50%); width: 240px; height: 5px; border-radius: 4px; background: rgba(255,255,255,0.12); overflow: hidden; }
+#stam > div { height: 100%; background: linear-gradient(90deg, #5ee3c0, #c8ff8a); }
+#toasts { position: absolute; right: 18px; bottom: 18px; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
+.toast { background: var(--glass); border: 1px solid var(--line); border-left: 4px solid var(--acc); padding: 9px 14px; border-radius: 10px; font-size: 14px; animation: tin .25s ease-out; max-width: 380px; backdrop-filter: blur(10px); }
+@keyframes tin { from { opacity: 0; transform: translateX(30px); } to { opacity: 1; transform: none; } }
+#banner { position: absolute; top: 22px; left: 50%; transform: translateX(-50%); text-align: center; padding: 12px 26px; border-radius: 14px; background: linear-gradient(180deg, rgba(60,30,0,0.75), rgba(20,10,0,0.75)); border: 1px solid rgba(255,180,60,0.5); box-shadow: 0 0 40px rgba(255,160,40,0.25); }
+#banner .t { font-size: 20px; font-weight: 800; color: #ffd27a; }
+#banner .s { font-size: 13px; color: #f0dcc0; }
+#effects { display: flex; gap: 6px; flex-wrap: wrap; max-width: 340px; }
+.eff { font-size: 12px; padding: 4px 9px; border-radius: 8px; background: rgba(255,181,46,0.15); border: 1px solid rgba(255,181,46,0.4); }
+/* Modal */
+#modal { position: fixed; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.35); backdrop-filter: blur(4px); }
+#modal .card { width: min(940px, 94vw); max-height: 86vh; display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+.mhead { padding: 18px 24px 12px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 16px; }
+.mhead .av { width: 54px; height: 54px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 28px; background: rgba(255,255,255,0.08); border: 1px solid var(--line); }
+.mhead h3 { margin: 0; font-size: 22px; }
+.mhead .sub { color: var(--dim); font-size: 13px; margin-top: 2px; }
+.mhead .x { margin-left: auto; }
+.tabs { display: flex; gap: 6px; padding: 10px 24px 0; flex-wrap: wrap; }
+.tabs button { border-radius: 10px 10px 0 0; border-bottom: none; }
+.tabs button.on { background: rgba(255,181,46,0.22); border-color: rgba(255,181,46,0.5); }
+.mbody { padding: 18px 24px 24px; overflow-y: auto; }
+.say { background: rgba(255,255,255,0.05); border-radius: 12px; padding: 12px 16px; margin-bottom: 14px; font-size: 15px; line-height: 1.45; border-left: 3px solid var(--acc); }
+.row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,0.04); margin-bottom: 8px; border: 1px solid transparent; }
+.row:hover { border-color: var(--line); }
+.row .grow { flex: 1; min-width: 0; }
+.row .t { font-weight: 600; }
+.row .d { font-size: 12px; color: var(--dim); margin-top: 2px; }
+.price { font-weight: 800; color: #ffe08a; white-space: nowrap; }
+.rar { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; box-shadow: 0 0 8px currentColor; background: currentColor; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.lvl { display: inline-flex; gap: 3px; margin-left: 8px; vertical-align: middle; }
+.lvl i { width: 8px; height: 8px; border-radius: 2px; background: rgba(255,255,255,0.15); }
+.lvl i.f { background: var(--acc); }
+.col { padding: 14px; border-radius: 14px; background: rgba(255,255,255,0.04); margin-bottom: 12px; }
+.col h4 { margin: 0 0 6px; }
+.slots { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.slot { padding: 6px 10px; border-radius: 8px; font-size: 12px; background: rgba(255,255,255,0.06); border: 1px dashed rgba(255,255,255,0.2); color: var(--dim); }
+.slot.have { border-style: solid; color: #fff; background: rgba(94,227,122,0.15); border-color: rgba(94,227,122,0.6); }
+.muted { color: var(--dim); }
+.foot { padding: 12px 24px; border-top: 1px solid var(--line); display: flex; gap: 10px; align-items: center; }
+#bigmap { width: 100%; aspect-ratio: 1; max-height: 60vh; border-radius: 14px; background: #0b0e12; }
+.prog { height: 6px; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden; margin-top: 6px; }
+.prog > div { height: 100%; background: var(--good); }
+input[type=range] { width: 220px; }
+select { background: #1a1f26; color: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-family: inherit; }
+#paused { position: fixed; inset: 0; z-index: 35; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.5); backdrop-filter: blur(6px); }
+#fps { position: fixed; left: 18px; bottom: 14px; font-size: 11px; color: rgba(255,255,255,0.4); z-index: 11; }
+::-webkit-scrollbar { width: 8px; } ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 4px; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="loading">
+  <h1>LOOT CITY</h1>
+  <h2>Город возможностей</h2>
+  <div class="bar"><div id="loadbar"></div></div>
+  <div id="loadmsg">Подготовка…</div>
+</div>
+
+<div id="start" class="hidden">
+  <div class="card">
+    <h1>LOOT CITY</h1>
+    <div class="muted">Начни с пустыми карманами — стань королём города.</div>
+    <div class="keys">
+      <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span><span>Ходьба · <kbd>Shift</kbd> бег · <kbd>Space</kbd> прыжок</span>
+      <span><kbd>E</kbd></span><span>Подобрать предмет / говорить с NPC</span>
+      <span><kbd>Tab</kbd></span><span>Телефон: рюкзак, коллекции, задания, карта</span>
+      <span><kbd>V</kbd></span><span>Сесть / слезть с транспорта</span>
+      <span><kbd>M</kbd></span><span>Большая карта</span>
+      <span><kbd>Esc</kbd></span><span>Пауза и настройки</span>
+    </div>
+    <div class="muted" style="font-size:13px;margin-bottom:18px">Ищи светящиеся предметы, продавай их в ломбарде, прокачивайся, открывай районы и строй дом мечты.</div>
+    <button class="primary big" id="playbtn">Играть</button>
+    <div style="margin-top:12px"><button id="resetbtn" style="font-size:12px;padding:6px 12px">Начать заново</button></div>
+  </div>
+</div>
+
+<div id="hud" class="hidden">
+  <div id="tl">
+    <div class="pill"><div><div id="money">$0</div><div id="income"></div></div></div>
+    <div class="pill" id="bagpill">🎒 <span id="bag">0/6</span></div>
+    <div class="pill" id="distpill">📍 <span id="dist">Окраина</span></div>
+    <div id="effects"></div>
+  </div>
+  <canvas id="minimap" width="440" height="440"></canvas>
+  <div id="clock" class="pill" style="justify-content:center"></div>
+  <div id="cross"></div>
+  <div id="prompt"></div>
+  <div id="stam"><div></div></div>
+  <div id="toasts"></div>
+  <div id="banner" class="hidden"><div class="t"></div><div class="s"></div></div>
+</div>
+<div id="fps"></div>
+
+<div id="modal" class="hidden"><div class="card" id="mcard"></div></div>
+
+<div id="paused" class="hidden">
+  <div class="card" style="min-width:420px">
+    <h2 style="margin-top:0">Пауза</h2>
+    <div class="row"><div class="grow">Качество графики</div>
+      <select id="quality"><option value="0">Низкое</option><option value="1">Среднее</option><option value="2">Высокое</option><option value="3">Ультра</option></select></div>
+    <div class="row"><div class="grow">Чувствительность мыши</div><input type="range" id="sens" min="0.3" max="3" step="0.05"></div>
+    <div class="row"><div class="grow">Громкость</div><input type="range" id="vol" min="0" max="1" step="0.05"></div>
+    <div style="display:flex;gap:10px;margin-top:16px">
+      <button class="primary" id="resume">Продолжить</button>
+      <button id="savebtn">Сохранить</button>
+      <button id="fsbtn">Полный экран</button>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,45 @@
+{
+  "name": "loot-city",
+  "productName": "Loot City",
+  "version": "1.0.0",
+  "description": "Loot City: Город возможностей",
+  "author": "Loot City",
+  "main": "main.js",
+  "build": {
+    "appId": "com.lootcity.game",
+    "productName": "Loot City",
+    "directories": {
+      "output": "../release"
+    },
+    "files": [
+      "main.js",
+      "LootCity.html",
+      "icon.png"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "icon.png",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Loot City",
+      "artifactName": "LootCity-Setup-${version}.exe",
+      "language": "1049"
+    }
+  },
+  "devDependencies": {
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8"
+  }
+}

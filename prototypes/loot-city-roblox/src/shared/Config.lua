@@ -196,6 +196,10 @@ function Config.districtOf(x: number, z: number): number
 	return (if x < 0 then 1 else 2) + (if z < 0 then 2 else 0)
 end
 
+-- Developer menu access. The place owner (or group owner) is always an admin.
+-- To give access to someone else, add their numeric UserId here, e.g. { 12345678 }.
+Config.ADMIN_IDS = {} :: { number }
+
 Config.DAY_LENGTH = 720 -- seconds per in-game day
 Config.START_MONEY = 20
 Config.START_SLOTS = 6

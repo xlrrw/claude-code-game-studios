@@ -834,6 +834,7 @@ RunService.RenderStepped:Connect(function(dt)
 		end
 		local ws = 16 * S.speed * (if veh then veh.speed else 1) * (if sp then 1.6 else 1)
 		if veh and sprinting then ws *= 1.25 end
+		ws *= (player:GetAttribute("LC_AdminSpeed") or 1)
 		hum.WalkSpeed = ws
 		hum.JumpPower = if veh then 0 else 50
 		hum.UseJumpPower = true

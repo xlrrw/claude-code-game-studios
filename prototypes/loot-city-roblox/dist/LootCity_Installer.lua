@@ -5,6 +5,7 @@
 -- 3) Вставьте ВЕСЬ этот текст в Command Bar и нажмите Enter
 -- 4) Дождитесь сообщения "Loot City установлен" в Output и нажмите Play
 -- Повторная установка безопасна: старая версия удаляется.
+-- Меню разработчика: F2 (или кнопка «🛠 Админ» сверху). Доступ — только у владельца места.
 -- ================================================================
 local ok, err = pcall(function()
 	local RS = game:GetService("ReplicatedStorage")
@@ -226,6 +227,10 @@ end
 function Config.districtOf(x: number, z: number): number
 	return (if x < 0 then 1 else 2) + (if z < 0 then 2 else 0)
 end
+
+-- Developer menu access. The place owner (or group owner) is always an admin.
+-- To give access to someone else, add their numeric UserId here, e.g. { 12345678 }.
+Config.ADMIN_IDS = {} :: { number }
 
 Config.DAY_LENGTH = 720 -- seconds per in-game day
 Config.START_MONEY = 20
@@ -1319,6 +1324,491 @@ end
 
 return HomeBuilder
 ]========])
+	script("LocalScript", "AdminClient", server, [========[
+--!nonstrict
+-- PROTOTYPE - NOT FOR PRODUCTION
+-- Developer menu UI. Lives in ServerScriptService and is cloned by the server ONLY into an
+-- admin's PlayerGui, so other players never receive this code. Every command is re-checked on the server.
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+
+local player = Players.LocalPlayer
+local Shared = ReplicatedStorage:WaitForChild("LootCityShared")
+local Config = require(Shared:WaitForChild("Config"))
+local AdminRF = Shared:WaitForChild("Admin")
+local gui = script.Parent
+
+local FONT, FONT_B = Enum.Font.Gotham, Enum.Font.GothamBold
+local BG = Color3.fromRGB(16, 19, 26)
+local ACC = Color3.fromRGB(255, 120, 60)
+local DIM = Color3.fromRGB(150, 160, 172)
+
+local function new(class, props, children)
+	local o = Instance.new(class)
+	for k, v in props or {} do
+		if k ~= "Parent" then (o :: any)[k] = v end
+	end
+	for _, c in children or {} do c.Parent = o end
+	if props and props.Parent then o.Parent = props.Parent end
+	return o
+end
+local function corner(r) return new("UICorner", { CornerRadius = UDim.new(0, r or 8) }) end
+local function label(text, props)
+	local l = new("TextLabel", { BackgroundTransparency = 1, Text = text, Font = FONT, TextSize = 14, TextColor3 = Color3.fromRGB(235, 238, 242), TextXAlignment = Enum.TextXAlignment.Left, RichText = true, Size = UDim2.new(1, 0, 0, 20) })
+	for k, v in props or {} do (l :: any)[k] = v end
+	return l
+end
+local function btn(text, color, onClick, w)
+	local b = new("TextButton", { Text = text, Font = FONT_B, TextSize = 13, TextColor3 = Color3.new(1, 1, 1), AutoButtonColor = true,
+		BackgroundColor3 = color or Color3.fromRGB(52, 58, 70), Size = UDim2.fromOffset(w or 0, 30), AutomaticSize = if w then Enum.AutomaticSize.None else Enum.AutomaticSize.X },
+		{ corner(7), new("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10) }) })
+	if onClick then b.MouseButton1Click:Connect(onClick) end
+	return b
+end
+local function box(placeholder, w, text)
+	return new("TextBox", { PlaceholderText = placeholder, Text = text or "", Font = FONT, TextSize = 13, TextColor3 = Color3.new(1, 1, 1), PlaceholderColor3 = DIM,
+		BackgroundColor3 = Color3.fromRGB(30, 34, 44), Size = UDim2.fromOffset(w or 140, 30), ClearTextOnFocus = false }, { corner(7) })
+end
+local function hrow(children)
+	return new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 30), AutomaticSize = Enum.AutomaticSize.Y },
+		{ new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6), Wraps = true, VerticalAlignment = Enum.VerticalAlignment.Center }), table.unpack(children) })
+end
+
+-- ===== window =====
+local win = new("Frame", { Visible = false, BackgroundColor3 = BG, BackgroundTransparency = 0.04, Position = UDim2.new(0, 18, 0.5, -330), Size = UDim2.fromOffset(600, 660), Active = true, Parent = gui },
+	{ corner(14), new("UIStroke", { Color = ACC, Transparency = 0.4, Thickness = 1.5 }) })
+local title = label("🛠 <b>Меню разработчика</b>", { TextSize = 18, Position = UDim2.fromOffset(16, 10), Size = UDim2.new(1, -80, 0, 26), Parent = win })
+local closeB = btn("✕", Color3.fromRGB(70, 40, 40), nil, 36)
+closeB.Position = UDim2.new(1, -48, 0, 10)
+closeB.Parent = win
+local targetL = label("", { TextSize = 13, TextColor3 = DIM, Position = UDim2.fromOffset(16, 38), Size = UDim2.new(1, -200, 0, 20), Parent = win })
+local prevB = btn("◀", nil, nil, 34)
+prevB.Position = UDim2.new(1, -170, 0, 36)
+prevB.Parent = win
+local selfB = btn("Я", ACC, nil, 50)
+selfB.Position = UDim2.new(1, -130, 0, 36)
+selfB.Parent = win
+local nextB = btn("▶", nil, nil, 34)
+nextB.Position = UDim2.new(1, -74, 0, 36)
+nextB.Parent = win
+local tabsF = new("Frame", { BackgroundTransparency = 1, Position = UDim2.fromOffset(12, 74), Size = UDim2.new(1, -24, 0, 30), Parent = win },
+	{ new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4) }) })
+local body = new("ScrollingFrame", { BackgroundTransparency = 1, Position = UDim2.fromOffset(14, 112), Size = UDim2.new(1, -28, 1, -150), CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y, ScrollBarThickness = 5, BorderSizePixel = 0, Parent = win },
+	{ new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }), new("UIPadding", { PaddingRight = UDim.new(0, 8) }) })
+local status = label("", { TextSize = 12, TextColor3 = DIM, Position = UDim2.new(0, 16, 1, -30), Size = UDim2.new(1, -32, 0, 20), Parent = win })
+
+-- drag by the title
+do
+	local dragging, start, startPos
+	title.Active = true
+	title.InputBegan:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging, start, startPos = true, i.Position, win.Position end
+	end)
+	UserInputService.InputChanged:Connect(function(i)
+		if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
+			local d = i.Position - start
+			win.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+		end
+	end)
+	UserInputService.InputEnded:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+	end)
+end
+
+local toggleB = btn("🛠 Админ [F2]", ACC, nil)
+toggleB.AnchorPoint = Vector2.new(0.5, 0)
+toggleB.Position = UDim2.new(0.5, 0, 0, 8)
+toggleB.Parent = gui
+
+-- ===== state =====
+local Info = nil
+local tab = "players"
+local targetId = player.UserId
+local order = 0
+local render -- forward
+
+local function setStatus(t, ok)
+	status.Text = (if ok == false then "<font color='#ff6a6a'>✗ </font>" else "<font color='#5ee37a'>✓ </font>") .. t
+end
+local function call(name, args, okText)
+	task.spawn(function()
+		local ok, res = pcall(function()
+			return AdminRF:InvokeServer(name, args or {})
+		end)
+		if ok and res then
+			setStatus(okText or name, true)
+		else
+			setStatus((okText or name) .. " — не выполнено", false)
+		end
+		task.wait(0.2)
+		local ok2, info = pcall(function()
+			return AdminRF:InvokeServer("info", {})
+		end)
+		if ok2 and info then
+			Info = info
+			render()
+		end
+	end)
+end
+local function targetArgs(extra)
+	local t = { target = targetId }
+	for k, v in extra or {} do t[k] = v end
+	return t
+end
+local function targetName()
+	if Info then
+		for _, p in Info.players do
+			if p.id == targetId then return p.name end
+		end
+	end
+	return player.Name
+end
+
+local function add(o)
+	order += 1
+	o.LayoutOrder = order
+	o.Parent = body
+	return o
+end
+local function section(text)
+	add(label("<b>" .. text .. "</b>", { TextSize = 15, TextColor3 = ACC, Size = UDim2.new(1, 0, 0, 24) }))
+end
+local function clear()
+	for _, c in body:GetChildren() do
+		if not c:IsA("UIListLayout") and not c:IsA("UIPadding") then c:Destroy() end
+	end
+	order = 0
+end
+
+local TABS = { { "players", "Игроки" }, { "give", "Выдать" }, { "progress", "Прогресс" }, { "world", "Мир" }, { "me", "Я" }, { "bans", "Баны" }, { "log", "Журнал" } }
+local function drawTabs()
+	for _, c in tabsF:GetChildren() do
+		if c:IsA("TextButton") then c:Destroy() end
+	end
+	for _, t in TABS do
+		local b = btn(t[2], if tab == t[1] then ACC else nil, function()
+			tab = t[1]
+			render()
+		end)
+		b.Parent = tabsF
+	end
+end
+
+-- ===== self tools (client-side) =====
+local Self = { fly = false, noclip = false, speed = 1 }
+local flyLV, flyAtt
+local function setFly(on)
+	Self.fly = on
+	local ch = player.Character
+	local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+	local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+	if flyLV then flyLV:Destroy() flyLV = nil end
+	if flyAtt then flyAtt:Destroy() flyAtt = nil end
+	if hum then hum.PlatformStand = on end
+	if on and hrp then
+		flyAtt = new("Attachment", { Parent = hrp })
+		flyLV = new("LinearVelocity", { Attachment0 = flyAtt, MaxForce = math.huge, VectorVelocity = Vector3.zero, RelativeTo = Enum.ActuatorRelativeTo.World, Parent = hrp })
+	end
+end
+RunService.Stepped:Connect(function()
+	local ch = player.Character
+	if not ch then return end
+	if Self.noclip then
+		for _, p in ch:GetDescendants() do
+			if p:IsA("BasePart") then p.CanCollide = false end
+		end
+	end
+	if Self.fly and flyLV then
+		local cam = workspace.CurrentCamera
+		local dir = Vector3.zero
+		if UserInputService:IsKeyDown(Enum.KeyCode.W) then dir += cam.CFrame.LookVector end
+		if UserInputService:IsKeyDown(Enum.KeyCode.S) then dir -= cam.CFrame.LookVector end
+		if UserInputService:IsKeyDown(Enum.KeyCode.D) then dir += cam.CFrame.RightVector end
+		if UserInputService:IsKeyDown(Enum.KeyCode.A) then dir -= cam.CFrame.RightVector end
+		if UserInputService:IsKeyDown(Enum.KeyCode.Space) then dir += Vector3.yAxis end
+		if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then dir -= Vector3.yAxis end
+		flyLV.VectorVelocity = if dir.Magnitude > 0 then dir.Unit * 90 * Self.speed else Vector3.zero
+	end
+end)
+player.CharacterAdded:Connect(function()
+	Self.fly = false
+	flyLV, flyAtt = nil, nil
+end)
+
+-- ===== tabs =====
+local reasonBox = nil
+local function drawPlayers()
+	section("Игроки на сервере (" .. #Info.players .. ")")
+	reasonBox = box("Причина кика/бана", 260)
+	add(hrow({ label("Причина:", { Size = UDim2.fromOffset(70, 30) }), reasonBox }))
+	for _, p in Info.players do
+		local f = add(new("Frame", { BackgroundColor3 = Color3.fromRGB(28, 32, 42), Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y }, { corner(8), new("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10), PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8) }), new("UIListLayout", { Padding = UDim.new(0, 6) }) }))
+		label(("<b>%s</b> (@%s, id %d)%s%s"):format(p.display, p.name, p.id, if p.admin then " <font color='#ff7a3c'>[админ]</font>" else "", if p.id == targetId then " <font color='#5ee37a'>◀ цель</font>" else ""), { Parent = f })
+		label(("💰 $%d · 🏠 %s · районов %d/4 · 🎒 %d · реп %d · 📍 %s"):format(p.money, Config.HOME_STAGES[p.home].name, p.districts, p.items, p.rep, p.where), { TextSize = 12, TextColor3 = DIM, Parent = f })
+		local r = hrow({
+			btn("Цель", ACC, function() targetId = p.id; render() end),
+			btn("ТП к нему", nil, function() call("tpTo", { target = p.id }, "телепорт к " .. p.name) end),
+			btn("Притянуть", nil, function() call("bring", { target = p.id }, "притянул " .. p.name) end),
+			btn("К его дому", nil, function() call("tpHome", { target = p.id }, "у дома " .. p.name) end),
+		})
+		r.Parent = f
+		if p.id ~= player.UserId then
+			local r2 = hrow({
+				btn("Кик", Color3.fromRGB(150, 100, 30), function() call("kick", { target = p.id, reason = reasonBox.Text }, "кик " .. p.name) end),
+				btn("Бан навсегда", Color3.fromRGB(170, 40, 40), function() call("ban", { target = p.id, reason = reasonBox.Text }, "бан " .. p.name) end),
+			})
+			r2.Parent = f
+		end
+	end
+end
+
+local countBox = nil
+local function drawGive()
+	section("Деньги → " .. targetName())
+	local amt = box("Сумма", 140, "10000")
+	add(hrow({
+		amt,
+		btn("Добавить", Color3.fromRGB(40, 120, 60), function() call("money", targetArgs({ amount = tonumber(amt.Text) or 0 }), "деньги +" .. amt.Text) end),
+		btn("Установить", nil, function() call("money", targetArgs({ amount = tonumber(amt.Text) or 0, set = true }), "баланс = " .. amt.Text) end),
+		btn("Забрать", Color3.fromRGB(150, 60, 40), function() call("money", targetArgs({ amount = -(tonumber(amt.Text) or 0) }), "деньги -" .. amt.Text) end),
+	}))
+	add(hrow({
+		btn("+$1 000", nil, function() call("money", targetArgs({ amount = 1000 }), "+$1 000") end),
+		btn("+$10 000", nil, function() call("money", targetArgs({ amount = 10000 }), "+$10 000") end),
+		btn("+$100 000", nil, function() call("money", targetArgs({ amount = 100000 }), "+$100 000") end),
+		btn("+$1 000 000", nil, function() call("money", targetArgs({ amount = 1000000 }), "+$1 000 000") end),
+	}))
+	section("Предметы → " .. targetName())
+	countBox = box("Кол-во", 70, "1")
+	add(hrow({ label("Количество:", { Size = UDim2.fromOffset(90, 30) }), countBox, btn("Очистить рюкзак", Color3.fromRGB(150, 60, 40), function() call("clearInv", targetArgs(), "рюкзак очищен") end) }))
+	for _, it in Config.ITEMS do
+		local r = Config.RARITY[it.r]
+		add(hrow({
+			label(("<font color='#%s'>●</font> %s <font color='#8a94a0'>· %s · $%d%s</font>"):format(r.color:ToHex(), it.name, r.name, it.v, if it.col then " · коллекция" else ""), { Size = UDim2.new(1, -230, 0, 30) }),
+			btn("В рюкзак", nil, function() call("item", targetArgs({ id = it.id, count = tonumber(countBox.Text) or 1 }), "выдан " .. it.name) end),
+			btn("На землю", nil, function() call("loot", { op = "spawn", id = it.id }, "на земле: " .. it.name) end),
+		}))
+	end
+end
+
+local function drawProgress()
+	section("Быстро → " .. targetName())
+	add(hrow({
+		btn("Все улучшения MAX", ACC, function() call("upgrade", targetArgs({ all = true }), "улучшения MAX") end),
+		btn("Все районы", nil, function() call("unlockAll", targetArgs({ what = "districts" }), "районы открыты") end),
+		btn("Весь транспорт", nil, function() call("unlockAll", targetArgs({ what = "vehicles" }), "транспорт выдан") end),
+		btn("Весь декор", nil, function() call("unlockAll", targetArgs({ what = "decor" }), "декор выдан") end),
+		btn("Все коллекции", nil, function() call("unlockAll", targetArgs({ what = "collections" }), "коллекции собраны") end),
+		btn("Бизнес MAX", nil, function() call("unlockAll", targetArgs({ what = "business" }), "бизнес MAX") end),
+	}))
+	section("Уровни улучшений")
+	for _, u in Config.UPGRADES do
+		local lv = box("0-" .. u.max, 60, "")
+		add(hrow({
+			label(u.name .. " <font color='#8a94a0'>(макс " .. u.max .. ")</font>", { Size = UDim2.new(1, -260, 0, 30) }),
+			lv,
+			btn("Установить", nil, function() call("upgrade", targetArgs({ id = u.id, lvl = tonumber(lv.Text) or 0 }), u.name .. " = " .. lv.Text) end),
+			btn("MAX", ACC, function() call("upgrade", targetArgs({ id = u.id, lvl = u.max }), u.name .. " MAX") end),
+		}))
+	end
+	section("Районы")
+	for d, dist in Config.DISTRICTS do
+		add(hrow({
+			label(dist.name, { Size = UDim2.new(1, -200, 0, 30) }),
+			btn("Открыть", Color3.fromRGB(40, 120, 60), function() call("district", targetArgs({ d = d, on = true }), dist.name .. " открыт") end),
+			btn("Закрыть", Color3.fromRGB(150, 60, 40), function() call("district", targetArgs({ d = d, on = false }), dist.name .. " закрыт") end),
+		}))
+	end
+	section("Дом")
+	local homeBtns = {}
+	for i, h in Config.HOME_STAGES do
+		table.insert(homeBtns, btn(h.name, nil, function() call("home", targetArgs({ stage = i }), "дом: " .. h.name) end))
+	end
+	add(hrow(homeBtns))
+	section("Прочее")
+	add(hrow({
+		btn("Репутация +10", nil, function() call("rep", targetArgs({ amount = 10 }), "репутация +10") end),
+		btn("Репутация −10", nil, function() call("rep", targetArgs({ amount = -10 }), "репутация −10") end),
+	}))
+	local confirm = false
+	local resetB
+	resetB = btn("Сбросить прогресс игрока", Color3.fromRGB(170, 40, 40), function()
+		if not confirm then
+			confirm = true
+			resetB.Text = "Точно сбросить? Нажмите ещё раз"
+			return
+		end
+		call("reset", targetArgs(), "прогресс сброшен")
+	end)
+	add(hrow({ resetB }))
+end
+
+local function drawWorld()
+	section("Сервер")
+	local h = math.floor(Info.time * 24)
+	add(label(("День %d · %02d:%02d · лута на карте %d · лимит на район %d · следующее событие через %dс"):format(Info.day, h, math.floor((Info.time * 24 - h) * 60), Info.loot, Info.cap, Info.eventIn), { TextColor3 = DIM, TextWrapped = true, Size = UDim2.new(1, 0, 0, 36) }))
+	add(label("Активно: " .. (if #Info.effects > 0 then table.concat(Info.effects, ", ") else "нет"), { TextColor3 = DIM }))
+	section("Время суток")
+	add(hrow({
+		btn("🌅 06:00", nil, function() call("time", { t = 0.25 }, "06:00") end),
+		btn("☀️ 09:00", nil, function() call("time", { t = 0.375 }, "09:00") end),
+		btn("🌞 12:00", nil, function() call("time", { t = 0.5 }, "12:00") end),
+		btn("🌇 18:30", nil, function() call("time", { t = 0.77 }, "18:30") end),
+		btn("🌙 23:00", nil, function() call("time", { t = 0.96 }, "23:00") end),
+		btn("Следующий день", nil, function() call("nextDay", {}, "новый день") end),
+	}))
+	section("События (в вашем районе)")
+	add(hrow({
+		btn("🚚 Грузовик", nil, function() call("event", { name = "truck" }, "грузовик") end),
+		btn("💸 Ажиотаж", nil, function() call("event", { name = "sale" }, "ажиотаж") end),
+		btn("🌧️ Ливень", nil, function() call("event", { name = "rain" }, "ливень") end),
+		btn("📦 Курьер", nil, function() call("event", { name = "courier" }, "курьер") end),
+		btn("✨ Лихорадка", nil, function() call("event", { name = "gold" }, "лихорадка") end),
+		btn("🗺️ Клад", nil, function() call("event", { name = "treasure" }, "клад") end),
+		btn("Остановить всё", Color3.fromRGB(150, 60, 40), function() call("stopEffects", {}, "события остановлены") end),
+	}))
+	section("Лут")
+	local cap = box("лимит", 70, tostring(Info.cap))
+	add(hrow({
+		label("Лимит предметов на район:", { Size = UDim2.fromOffset(190, 30) }), cap,
+		btn("Применить", nil, function() call("loot", { op = "cap", n = tonumber(cap.Text) or 40 }, "лимит " .. cap.Text) end),
+		btn("Пересоздать весь лут", nil, function() call("loot", { op = "clear" }, "лут пересоздан") end),
+	}))
+	section("Объявление всем игрокам")
+	local ann = box("Текст объявления", 380)
+	add(hrow({ ann, btn("📢 Отправить", ACC, function() call("announce", { text = ann.Text }, "объявление отправлено") end) }))
+	section("Сохранения")
+	add(hrow({ btn("💾 Сохранить всех игроков", nil, function() call("saveAll", {}, "сохранено") end) }))
+end
+
+local function drawMe()
+	section("Перемещение")
+	add(hrow({
+		btn(if Self.fly then "✈️ Полёт: ВКЛ" else "✈️ Полёт: выкл", if Self.fly then ACC else nil, function() setFly(not Self.fly); render() end),
+		btn(if Self.noclip then "👻 Сквозь стены: ВКЛ" else "👻 Сквозь стены: выкл", if Self.noclip then ACC else nil, function() Self.noclip = not Self.noclip; render() end),
+	}))
+	add(label("Полёт: WASD + Space (вверх) / Ctrl (вниз), направление — по камере.", { TextSize = 12, TextColor3 = DIM }))
+	local sp = {}
+	for _, m in { 1, 2, 3, 5, 10 } do
+		table.insert(sp, btn("×" .. m, if Self.speed == m then ACC else nil, function()
+			Self.speed = m
+			player:SetAttribute("LC_AdminSpeed", m)
+			render()
+		end))
+	end
+	add(hrow({ label("Скорость:", { Size = UDim2.fromOffset(80, 30) }), table.unpack(sp) }))
+	section("Телепорт")
+	local H = Config.HALF / 2
+	add(hrow({
+		btn("🏪 Рынок", nil, function() call("tpPos", { x = Config.roadLine(2) + Config.CELL / 2, z = Config.roadLine(3) + Config.CELL / 2 - 20 }, "рынок") end),
+		btn("🏠 Мой дом", nil, function() call("tpHome", {}, "дом") end),
+		btn("Окраина", nil, function() call("tpPos", { x = -H, z = H }, "Окраина") end),
+		btn("Центр", nil, function() call("tpPos", { x = H, z = H }, "Центр") end),
+		btn("Промзона", nil, function() call("tpPos", { x = -H, z = -H }, "Промзона") end),
+		btn("Холмы", nil, function() call("tpPos", { x = H, z = -H }, "Холмы") end),
+	}))
+	local xb, zb = box("X", 80), box("Z", 80)
+	add(hrow({ label("Координаты:", { Size = UDim2.fromOffset(90, 30) }), xb, zb, btn("ТП", nil, function() call("tpPos", { x = tonumber(xb.Text), z = tonumber(zb.Text) }, "ТП") end) }))
+	add(label("Совет: телепорт в закрытый район вернёт вас обратно — сначала откройте районы во вкладке «Прогресс».", { TextSize = 12, TextColor3 = DIM, TextWrapped = true, Size = UDim2.new(1, 0, 0, 34) }))
+end
+
+local function drawBans()
+	section("Забанить по UserId (даже если игрок не в сети)")
+	local idb, rb = box("UserId", 130), box("Причина", 220)
+	add(hrow({ idb, rb, btn("Бан", Color3.fromRGB(170, 40, 40), function() call("ban", { target = tonumber(idb.Text), reason = rb.Text, name = idb.Text }, "бан " .. idb.Text) end) }))
+	section("Список банов (" .. #Info.bans .. ")")
+	if #Info.bans == 0 then add(label("Никто не забанен.", { TextColor3 = DIM })) end
+	for _, b in Info.bans do
+		add(hrow({
+			label(("<b>%s</b> (id %s) — %s <font color='#8a94a0'>· забанил %s</font>"):format(tostring(b.name), b.id, tostring(b.reason), tostring(b.by)), { Size = UDim2.new(1, -110, 0, 30), TextTruncate = Enum.TextTruncate.AtEnd }),
+			btn("Разбанить", Color3.fromRGB(40, 120, 60), function() call("unban", { id = b.id }, "разбан " .. b.id) end),
+		}))
+	end
+end
+
+local function drawLog()
+	section("Журнал действий администраторов (сессия сервера)")
+	if #Info.log == 0 then add(label("Пока пусто.", { TextColor3 = DIM })) end
+	for _, e in Info.log do
+		add(label(("<font color='#8a94a0'>%s · %s</font>  %s"):format(e.t, e.who, e.text), { TextSize = 13, TextWrapped = true, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y }))
+	end
+end
+
+render = function()
+	if not win.Visible then return end
+	drawTabs()
+	targetL.Text = "Цель команд: <b>" .. targetName() .. "</b>" .. (if targetId == player.UserId then " (вы)" else "")
+	clear()
+	if not Info then
+		add(label("Загрузка…", { TextColor3 = DIM }))
+		return
+	end
+	if tab == "players" then drawPlayers()
+	elseif tab == "give" then drawGive()
+	elseif tab == "progress" then drawProgress()
+	elseif tab == "world" then drawWorld()
+	elseif tab == "me" then drawMe()
+	elseif tab == "bans" then drawBans()
+	else drawLog() end
+end
+
+local function refresh()
+	local ok, info = pcall(function()
+		return AdminRF:InvokeServer("info", {})
+	end)
+	if ok and info then
+		Info = info
+		-- drop a target that left
+		local found = false
+		for _, p in Info.players do
+			if p.id == targetId then found = true end
+		end
+		if not found then targetId = player.UserId end
+	end
+end
+local function cycle(dir)
+	if not Info or #Info.players == 0 then return end
+	local idx = 1
+	for i, p in Info.players do
+		if p.id == targetId then idx = i end
+	end
+	idx = ((idx - 1 + dir) % #Info.players) + 1
+	targetId = Info.players[idx].id
+	render()
+end
+prevB.MouseButton1Click:Connect(function() cycle(-1) end)
+nextB.MouseButton1Click:Connect(function() cycle(1) end)
+selfB.MouseButton1Click:Connect(function() targetId = player.UserId; render() end)
+
+local function toggle()
+	win.Visible = not win.Visible
+	if win.Visible then
+		task.spawn(function()
+			refresh()
+			render()
+		end)
+	end
+end
+toggleB.MouseButton1Click:Connect(toggle)
+closeB.MouseButton1Click:Connect(toggle)
+UserInputService.InputBegan:Connect(function(input, processed)
+	if input.KeyCode == Enum.KeyCode.F2 and not processed then toggle() end
+end)
+
+-- light auto-refresh of the info line while the window is open (does not rebuild text boxes being typed in)
+task.spawn(function()
+	while true do
+		task.wait(3)
+		if win.Visible and (tab == "players" or tab == "log" or tab == "bans") and not UserInputService:GetFocusedTextBox() then
+			refresh()
+			render()
+		end
+	end
+end)
+print("[LootCity] developer menu ready (F2)")
+]========])
 	script("Script", "Server", server, [========[
 --!nonstrict
 -- PROTOTYPE - NOT FOR PRODUCTION
@@ -1942,10 +2432,68 @@ local function save(plr)
 	end)
 end
 
+-- ---------- admin access & bans ----------
+-- Who may open the developer menu: the place owner (or the group owner for group games),
+-- anyone listed in Config.ADMIN_IDS, and the local tester of an unpublished place in Studio.
+local function isAdmin(plr: Player): boolean
+	if table.find(Config.ADMIN_IDS, plr.UserId) then return true end
+	if game.CreatorType == Enum.CreatorType.User and game.CreatorId ~= 0 and plr.UserId == game.CreatorId then return true end
+	if game.CreatorType == Enum.CreatorType.Group and game.CreatorId ~= 0 then
+		local ok, rank = pcall(function()
+			return (plr :: any):GetRankInGroupAsync(game.CreatorId)
+		end)
+		if ok and rank >= 255 then return true end
+	end
+	if RunService:IsStudio() and game.CreatorId == 0 then return true end
+	return false
+end
+local banStore
+pcall(function()
+	banStore = DataStoreService:GetDataStore("LootCity_Bans_v1")
+end)
+local Bans = {} -- [tostring(userId)] = {name, reason, by, time}
+pcall(function()
+	if banStore then Bans = banStore:GetAsync("list") or {} end
+end)
+local function saveBans()
+	if banStore then
+		pcall(function()
+			banStore:SetAsync("list", Bans)
+		end)
+	end
+end
+local AdminLog = {}
+local function adminLog(admin: Player?, text: string)
+	table.insert(AdminLog, 1, { t = os.date("!%H:%M:%S"), who = if admin then admin.Name else "сервер", text = text })
+	while #AdminLog > 80 do table.remove(AdminLog) end
+	print("[LootCity admin]", if admin then admin.Name else "", text)
+end
+local adminGuiSource = script.Parent:FindFirstChild("AdminClient")
+local function giveAdminGui(plr: Player)
+	if not adminGuiSource or not isAdmin(plr) then return end
+	local pg = plr:WaitForChild("PlayerGui", 10)
+	if not pg or pg:FindFirstChild("LootCityAdmin") then return end
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "LootCityAdmin"
+	gui.ResetOnSpawn = false
+	gui.DisplayOrder = 50
+	gui.IgnoreGuiInset = true
+	local ls = adminGuiSource:Clone()
+	ls.Disabled = false
+	ls.Parent = gui
+	gui.Parent = pg
+end
+
 Players.PlayerAdded:Connect(function(plr)
+	local ban = Bans[tostring(plr.UserId)]
+	if ban then
+		plr:Kick("Вы забанены в Loot City. Причина: " .. tostring(ban.reason or "—"))
+		return
+	end
 	Session[plr] = { passiveAcc = 0, ticket = 0 }
 	Data[plr] = load(plr)
 	setupPlot(plr)
+	task.spawn(giveAdminGui, plr)
 	plr.CharacterAdded:Connect(function(ch)
 		task.wait(0.5)
 		applyVehicle(plr)
@@ -2011,11 +2559,11 @@ local function spawnChest(d, at)
 	rec.expire = 240
 	return rec
 end
-local function randomEvent()
+local function randomEvent(forced: string?, forcedD: number?)
 	local open = openDistrictsFor()
-	local d = open[math.random(1, #open)]
+	local d = forcedD or open[math.random(1, #open)]
 	local at = randomSpawnIn(d)
-	local ev = ({ "truck", "sale", "rain", "courier", "gold", "treasure" })[math.random(1, 6)]
+	local ev = forced or ({ "truck", "sale", "rain", "courier", "gold", "treasure" })[math.random(1, 6)]
 	PushRE:FireAllClients({ type = "sfx", id = "event" })
 	if ev == "truck" then
 		for _ = 1, 8 do
@@ -2277,6 +2825,331 @@ ActionRF.OnServerInvoke = function(plr, name, args)
 	end
 	if res and sfx then push(plr, { type = "sfx", id = sfx }) end
 	sync(plr)
+	return res
+end
+
+-- ---------- developer / admin menu ----------
+local AdminRF: RemoteFunction = remote("RemoteFunction", "Admin")
+local function byId(id): Player?
+	for _, p in Players:GetPlayers() do
+		if p.UserId == tonumber(id) then return p end
+	end
+	return nil
+end
+local function hrpOf(p: Player?)
+	local ch = p and p.Character
+	return ch and ch:FindFirstChild("HumanoidRootPart")
+end
+local function refreshPlayer(p: Player)
+	local s, ses = Data[p], Session[p]
+	if not s or not ses then return end
+	if ses.plotModel then
+		ses.plotModel:ClearAllChildren()
+		HomeBuilder.Sign(ses.plotModel, ses.plot, "Участок: " .. p.DisplayName)
+		HomeBuilder.SetStage(ses.plotModel, ses.plot, s.home)
+		for _, d in s.decor do
+			HomeBuilder.AddDecor(ses.plotModel, ses.plot, d)
+		end
+	end
+	applyVehicle(p)
+	sync(p)
+end
+local function banUser(admin, userId: number, name: string, reason: string)
+	Bans[tostring(userId)] = { name = name, reason = reason, by = admin.Name, time = os.time() }
+	saveBans()
+	pcall(function()
+		(Players :: any):BanAsync({ UserIds = { userId }, ApplyToUniverse = true, Duration = -1, DisplayReason = reason, PrivateReason = "Loot City admin: " .. admin.Name })
+	end)
+	local p = byId(userId)
+	if p then p:Kick("Вы забанены в Loot City. Причина: " .. reason) end
+	adminLog(admin, ("бан %s (%d): %s"):format(name, userId, reason))
+end
+
+local Admin = {}
+function Admin.info(_admin, _a)
+	local list = {}
+	for _, p in Players:GetPlayers() do
+		local s = Data[p]
+		local hrp = hrpOf(p)
+		local nUn = 0
+		if s then
+			for d = 1, 4 do
+				if s.unlocked[d] then nUn += 1 end
+			end
+		end
+		table.insert(list, {
+			id = p.UserId, name = p.Name, display = p.DisplayName, admin = isAdmin(p),
+			money = if s then s.money else 0, home = if s then s.home else 1, districts = nUn,
+			items = if s then #s.inv else 0, rep = if s then s.rep else 0,
+			where = if hrp then DISTRICTS[Config.districtOf(hrp.Position.X, hrp.Position.Z)].name else "—",
+		})
+	end
+	local bans = {}
+	for id, b in Bans do
+		table.insert(bans, { id = id, name = b.name, reason = b.reason, by = b.by })
+	end
+	local fx = {}
+	for k, t in World.effects do
+		table.insert(fx, k .. " " .. math.ceil(t) .. "с")
+	end
+	local nLoot = 0
+	for _ in loot do nLoot += 1 end
+	return { players = list, bans = bans, log = AdminLog, time = World.time, day = World.day, effects = fx, loot = nLoot, cap = CAP, eventIn = math.ceil(World.eventTimer) }
+end
+-- target helpers: a.target = UserId (defaults to the admin)
+local function target(admin, a)
+	local p = if a.target then byId(a.target) else admin
+	return p, p and Data[p]
+end
+function Admin.money(admin, a)
+	local p, s = target(admin, a)
+	local amt = tonumber(a.amount) or 0
+	if not s then return false end
+	if a.set then s.money = math.max(0, amt) else s.money = math.max(0, s.money + amt) end
+	if amt > 0 and not a.set then s.earned += amt end
+	adminLog(admin, ("%s %s: %s$%d"):format(if a.set then "деньги =" else "деньги +", p.Name, "", amt))
+	toast(p, ("Администратор: %s$%d"):format(if a.set then "баланс = " else "+", amt), "#5ee37a")
+	sync(p)
+	return true
+end
+function Admin.item(admin, a)
+	local p, s = target(admin, a)
+	local def = ITEM[a.id]
+	if not s or not def then return false end
+	local n = math.clamp(tonumber(a.count) or 1, 1, 100)
+	for _ = 1, n do
+		table.insert(s.inv, { id = def.id, value = math.floor(def.v * DISTRICTS[4].lootMult ^ 0.35) })
+	end
+	adminLog(admin, ("выдал %s ×%d → %s"):format(def.name, n, p.Name))
+	toast(p, ("Администратор выдал: %s ×%d"):format(def.name, n), "#b26bff")
+	sync(p)
+	return true
+end
+function Admin.upgrade(admin, a)
+	local p, s = target(admin, a)
+	if not s then return false end
+	for _, u in Config.UPGRADES do
+		if a.all or u.id == a.id then
+			local l = if a.all then u.max else math.clamp(tonumber(a.lvl) or 0, 0, u.max)
+			s.upg[u.id] = l
+		end
+	end
+	adminLog(admin, ("уровни улучшений %s → %s"):format(if a.all then "MAX" else tostring(a.id) .. "=" .. tostring(a.lvl), p.Name))
+	sync(p)
+	return true
+end
+function Admin.unlockAll(admin, a)
+	local p, s = target(admin, a)
+	if not s then return false end
+	local what = a.what
+	if what == "districts" then
+		s.unlocked = { true, true, true, true }
+	elseif what == "vehicles" then
+		for _, v in Config.VEHICLES do
+			if not has(s.vehicles, v.id) then table.insert(s.vehicles, v.id) end
+		end
+	elseif what == "decor" then
+		for _, d in Config.DECOR do
+			if not has(s.decor, d.id) then table.insert(s.decor, d.id) end
+		end
+	elseif what == "collections" then
+		for _, it in Config.ITEMS do
+			if it.col then
+				s.col[it.col] = s.col[it.col] or {}
+				if not has(s.col[it.col], it.id) then table.insert(s.col[it.col], it.id) end
+			end
+		end
+		checkCollections(p)
+	elseif what == "business" then
+		for _, b in Config.BUSINESSES do
+			s.biz[b.id] = b.max
+		end
+	else
+		return false
+	end
+	adminLog(admin, ("открыл всё: %s → %s"):format(what, p.Name))
+	refreshPlayer(p)
+	return true
+end
+function Admin.district(admin, a)
+	local p, s = target(admin, a)
+	local d = tonumber(a.d)
+	if not s or not d or d < 1 or d > 4 then return false end
+	s.unlocked[d] = a.on ~= false
+	s.unlocked[1] = true
+	adminLog(admin, ("район %s %s → %s"):format(DISTRICTS[d].name, if s.unlocked[d] then "открыт" else "закрыт", p.Name))
+	sync(p)
+	return true
+end
+function Admin.home(admin, a)
+	local p, s = target(admin, a)
+	local st = math.clamp(tonumber(a.stage) or 1, 1, #Config.HOME_STAGES)
+	if not s then return false end
+	s.home = st
+	adminLog(admin, ("дом %s → %s"):format(Config.HOME_STAGES[st].name, p.Name))
+	refreshPlayer(p)
+	return true
+end
+function Admin.rep(admin, a)
+	local p, s = target(admin, a)
+	if not s then return false end
+	s.rep = math.max(0, s.rep + (tonumber(a.amount) or 0))
+	adminLog(admin, ("репутация %+d → %s"):format(tonumber(a.amount) or 0, p.Name))
+	sync(p)
+	return true
+end
+function Admin.clearInv(admin, a)
+	local p, s = target(admin, a)
+	if not s then return false end
+	s.inv = {}
+	adminLog(admin, "очистил рюкзак " .. p.Name)
+	sync(p)
+	return true
+end
+function Admin.reset(admin, a)
+	local p, s = target(admin, a)
+	if not s then return false end
+	Data[p] = fresh()
+	adminLog(admin, "сбросил прогресс " .. p.Name)
+	toast(p, "Ваш прогресс сброшен администратором.", "#ff5a5a")
+	refreshPlayer(p)
+	return true
+end
+function Admin.kick(admin, a)
+	local p = byId(a.target)
+	if not p or p == admin then return false end
+	local reason = tostring(a.reason or "Кикнут администратором")
+	adminLog(admin, ("кик %s: %s"):format(p.Name, reason))
+	p:Kick(reason)
+	return true
+end
+function Admin.ban(admin, a)
+	local id = tonumber(a.target)
+	if not id or id == admin.UserId then return false end
+	local p = byId(id)
+	local name = if p then p.Name else tostring(a.name or id)
+	banUser(admin, id, name, tostring(a.reason ~= "" and a.reason or "Нарушение правил"))
+	return true
+end
+function Admin.unban(admin, a)
+	local id = tonumber(a.id)
+	if not id then return false end
+	Bans[tostring(id)] = nil
+	saveBans()
+	pcall(function()
+		(Players :: any):UnbanAsync({ UserIds = { id }, ApplyToUniverse = true })
+	end)
+	adminLog(admin, "разбан " .. id)
+	return true
+end
+function Admin.tpTo(admin, a)
+	local me, other = hrpOf(admin), hrpOf(byId(a.target))
+	if not me or not other then return false end
+	me.CFrame = other.CFrame * CFrame.new(0, 0, 5)
+	return true
+end
+function Admin.bring(admin, a)
+	local who = byId(a.target)
+	local me, other = hrpOf(admin), hrpOf(who)
+	if not who or not me or not other then return false end
+	other.CFrame = me.CFrame * CFrame.new(0, 0, -5)
+	adminLog(admin, "притянул " .. who.Name)
+	return true
+end
+function Admin.tpPos(admin, a)
+	local me = hrpOf(admin)
+	local x, z = tonumber(a.x), tonumber(a.z)
+	if not me or not x or not z then return false end
+	me.CFrame = CFrame.new(x, Config.CURB + 5, z)
+	return true
+end
+function Admin.tpHome(admin, a)
+	local p = if a.target then byId(a.target) else admin
+	local me = hrpOf(admin)
+	local ses = p and Session[p]
+	if not me or not ses or not ses.plot then return false end
+	local pl = ses.plot
+	me.CFrame = CFrame.new((pl.x0 + pl.x1) / 2, Config.CURB + 5, if pl.front < 0 then pl.z0 - 6 else pl.z1 + 6)
+	return true
+end
+function Admin.time(admin, a)
+	local t = tonumber(a.t)
+	if not t then return false end
+	World.time = t % 1
+	adminLog(admin, ("время %02d:00"):format(math.floor(World.time * 24)))
+	return true
+end
+function Admin.nextDay(admin, _a)
+	World.day += 1
+	rollMarket()
+	adminLog(admin, "новый день (рынок обновлён)")
+	return true
+end
+function Admin.event(admin, a)
+	local ok = table.find({ "truck", "sale", "rain", "courier", "gold", "treasure" }, a.name)
+	if not ok then return false end
+	local hrp = hrpOf(admin)
+	local d = if hrp then Config.districtOf(hrp.Position.X, hrp.Position.Z) else nil
+	randomEvent(a.name, d)
+	adminLog(admin, "событие " .. a.name)
+	return true
+end
+function Admin.stopEffects(admin, _a)
+	table.clear(World.effects)
+	workspace:SetAttribute("LC_Rain", false)
+	adminLog(admin, "остановил все события")
+	return true
+end
+function Admin.loot(admin, a)
+	if a.op == "clear" then
+		for _, rec in table.clone(loot) do removeLoot(rec) end
+		populate()
+		adminLog(admin, "пересоздал весь лут")
+	elseif a.op == "cap" then
+		CAP = math.clamp(tonumber(a.n) or 40, 5, 150)
+		populate()
+		adminLog(admin, "лимит лута на район = " .. CAP)
+	elseif a.op == "spawn" then
+		local def = ITEM[a.id]
+		local hrp = hrpOf(admin)
+		if not def or not hrp then return false end
+		local pos = hrp.Position + hrp.CFrame.LookVector * 8
+		local rec = spawnLoot(def, Vector3.new(pos.X, Config.CURB, pos.Z), Config.districtOf(pos.X, pos.Z), true, false)
+		rec.expire = 600
+		adminLog(admin, "положил на землю " .. def.name)
+	else
+		return false
+	end
+	return true
+end
+function Admin.announce(admin, a)
+	local text = tostring(a.text or "")
+	if #text == 0 then return false end
+	text = text:sub(1, 200)
+	bannerAll("📢 Объявление", text)
+	adminLog(admin, "объявление: " .. text)
+	return true
+end
+function Admin.saveAll(admin, _a)
+	for _, p in Players:GetPlayers() do
+		save(p)
+	end
+	adminLog(admin, "сохранил всех игроков")
+	return true
+end
+
+AdminRF.OnServerInvoke = function(plr, name, args)
+	if not isAdmin(plr) then
+		warn("[LootCity] blocked admin call from", plr.Name, name)
+		return false
+	end
+	if type(name) ~= "string" or not Admin[name] then return false end
+	args = if type(args) == "table" then args else {}
+	local ok, res = pcall(Admin[name], plr, args)
+	if not ok then
+		warn("LootCity admin error", name, res)
+		return false
+	end
 	return res
 end
 
@@ -3206,6 +4079,7 @@ RunService.RenderStepped:Connect(function(dt)
 		end
 		local ws = 16 * S.speed * (if veh then veh.speed else 1) * (if sp then 1.6 else 1)
 		if veh and sprinting then ws *= 1.25 end
+		ws *= (player:GetAttribute("LC_AdminSpeed") or 1)
 		hum.WalkSpeed = ws
 		hum.JumpPower = if veh then 0 else 50
 		hum.UseJumpPower = true

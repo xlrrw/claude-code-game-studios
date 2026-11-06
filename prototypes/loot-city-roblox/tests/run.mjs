@@ -3,7 +3,7 @@
 import fs from 'fs';
 import { execFileSync } from 'child_process';
 const luau = process.argv[2];
-const files = { Server: 'src/server/Server.server.lua', Config: 'src/shared/Config.lua', CityBuilder: 'src/server/CityBuilder.lua', ItemFactory: 'src/server/ItemFactory.lua', HomeBuilder: 'src/server/HomeBuilder.lua' };
+const files = { AdminClient: 'src/server/AdminClient.client.lua', Server: 'src/server/Server.server.lua', Config: 'src/shared/Config.lua', CityBuilder: 'src/server/CityBuilder.lua', ItemFactory: 'src/server/ItemFactory.lua', HomeBuilder: 'src/server/HomeBuilder.lua' };
 let prelude = 'local SRC = {}\n';
 for (const [k, p] of Object.entries(files)) {
   const s = fs.readFileSync(p, 'utf8');

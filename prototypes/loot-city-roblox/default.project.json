@@ -11,6 +11,7 @@
         "CityBuilder": { "$path": "src/server/CityBuilder.lua" },
         "ItemFactory": { "$path": "src/server/ItemFactory.lua" },
         "HomeBuilder": { "$path": "src/server/HomeBuilder.lua" },
+        "AdminClient": { "$path": "src/server/AdminClient.client.lua" },
         "Server": { "$path": "src/server/Server.server.lua" }
       }
     },

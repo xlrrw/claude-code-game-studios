@@ -9,6 +9,7 @@ const SRC = {
   HomeBuilder: read('src/server/HomeBuilder.lua'),
   Server: read('src/server/Server.server.lua'),
   Client: read('src/client/Client.client.lua'),
+  AdminClient: read('src/server/AdminClient.client.lua'),
 };
 const EQ = '========';
 for (const [k, s] of Object.entries(SRC)) {
@@ -22,6 +23,7 @@ const out = `-- ================================================================
 -- 3) Вставьте ВЕСЬ этот текст в Command Bar и нажмите Enter
 -- 4) Дождитесь сообщения "Loot City установлен" в Output и нажмите Play
 -- Повторная установка безопасна: старая версия удаляется.
+-- Меню разработчика: F2 (или кнопка «🛠 Админ» сверху). Доступ — только у владельца места.
 -- ================================================================
 local ok, err = pcall(function()
 	local RS = game:GetService("ReplicatedStorage")
@@ -52,6 +54,7 @@ local ok, err = pcall(function()
 	local cityBuilder = script("ModuleScript", "CityBuilder", server, ${ls(SRC.CityBuilder)})
 	script("ModuleScript", "ItemFactory", server, ${ls(SRC.ItemFactory)})
 	script("ModuleScript", "HomeBuilder", server, ${ls(SRC.HomeBuilder)})
+	script("LocalScript", "AdminClient", server, ${ls(SRC.AdminClient)})
 	script("Script", "Server", server, ${ls(SRC.Server)})
 	script("LocalScript", "LootCityClient", SPS, ${ls(SRC.Client)})
 

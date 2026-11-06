@@ -92,7 +92,9 @@ local enumMeta = {}
 enumMeta.__index = function(t, k)
 	local path = rawget(t, "_p") .. "." .. k
 	if path == "Enum.Material.NotAMaterial" then error("no such enum") end
-	return setmetatable({ _p = path }, enumMeta)
+	local v = setmetatable({ _p = path }, enumMeta)
+	rawset(t, k, v)
+	return v
 end
 Enum = setmetatable({ _p = "Enum" }, enumMeta)
 
@@ -212,6 +214,7 @@ MockAddPlayer = function(id)
 	local hrp = Inst.new("Part"); hrp.Name = "HumanoidRootPart"; hrp.CFrame = CFrame.new(0, 3, 0); hrp.Size = Vector3.new(2, 2, 1); hrp.Parent = ch
 	Inst.new("Humanoid").Parent = ch
 	plr.Character = ch
+	local pg = Inst.new("PlayerGui"); pg.Name = "PlayerGui"; pg.Parent = plr
 	table.insert(playersList, plr)
 	Players.PlayerAdded:Fire(plr)
 	return plr
@@ -224,9 +227,31 @@ rawget(game:GetService("DataStoreService"), "_props").GetDataStore = function()
 	}
 end
 game.BindToClose = function() end
+game.CreatorType = Enum.CreatorType.User
+game.CreatorId = 101 -- the test owner
+rawget(game:GetService("RunService"), "_props").IsStudio = function() return false end
+function Inst:Clone()
+	local c = Inst.new(self._props.ClassName)
+	for k, v in self._props do if k ~= "Parent" then c._props[k] = v end end
+	return c
+end
+function Inst:Kick(reason) self._props.Kicked = reason or true end
+function Inst:GetRankInGroupAsync() return 0 end
 DELAYED = {}
 task = {
 	spawn = function(fn, ...) local co = coroutine.create(fn); coroutine.resume(co, ...) end,
 	delay = function(_, fn, ...) table.insert(DELAYED, fn) end,
 	wait = function() coroutine.yield() end,
 }
+MockRemovePlayer = function(plr)
+	local list = game:GetService("Players"):GetPlayers()
+	local Pl = game:GetService("Players")
+	local raw = rawget(Pl, "_props").GetPlayers
+	rawget(Pl, "_props").GetPlayers = function()
+		local out = {}
+		for _, p in raw() do if p ~= plr then table.insert(out, p) end end
+		return out
+	end
+	Pl.PlayerRemoving:Fire(plr)
+	local _ = list
+end

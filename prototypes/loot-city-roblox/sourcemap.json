@@ -4,6 +4,7 @@
    {"name":"CityBuilder","className":"ModuleScript","filePaths":["src/server/CityBuilder.lua"]},
    {"name":"ItemFactory","className":"ModuleScript","filePaths":["src/server/ItemFactory.lua"]},
    {"name":"HomeBuilder","className":"ModuleScript","filePaths":["src/server/HomeBuilder.lua"]},
+   {"name":"AdminClient","className":"LocalScript","filePaths":["src/server/AdminClient.client.lua"]},
    {"name":"Server","className":"Script","filePaths":["src/server/Server.server.lua"]}]}]},
  {"name":"StarterPlayer","className":"StarterPlayer","children":[{"name":"StarterPlayerScripts","className":"StarterPlayerScripts","children":[{"name":"LootCityClient","className":"LocalScript","filePaths":["src/client/Client.client.lua"]}]}]}
 ]}

@@ -14,11 +14,21 @@ city stays engaging without other players. This version runs on Roblox.
 
 Alternative for developers: `rojo serve` with `default.project.json` (the map is then built by the server at runtime).
 
+## Developer menu (F2)
+Only the place owner gets it (group owner for group games; extra people via `Config.ADMIN_IDS`;
+in an unpublished place, whoever runs Play in Studio). The UI script is cloned by the server into the
+admin's PlayerGui only, and every command is re-checked on the server.
+Tabs: players (teleport, bring, kick, permanent ban), give (money, any item), progress (upgrade levels,
+districts, home stage, vehicles, decor, collections, businesses, reset), world (time, events, loot cap,
+announcements, save), me (fly, noclip, speed, teleports), bans (ban by UserId, unban), log.
+Bans are stored in DataStore `LootCity_Bans_v1` and also sent to `Players:BanAsync` when available.
+
 ## What's inside
 - `src/shared/Config.lua` — items, rarities, districts, upgrades, vehicles, home, businesses, NPCs, map layout.
 - `src/server/CityBuilder.lua` — deterministic city plan + builder (Future lighting, real materials).
 - `src/server/ItemFactory.lua`, `HomeBuilder.lua` — loot models, home stages and decor.
 - `src/server/Server.server.lua` — DataStore saves, economy, loot, NPC shops, quests, events, plots, vehicles.
+- `src/server/AdminClient.client.lua` — developer menu UI (sent to admins only).
 - `src/client/Client.client.lua` — HUD, minimap, phone, shop UI, night lights, rain, traffic, sprint.
 - `tools/build_installer.mjs` — packs everything into `dist/LootCity_Installer.lua`.
 

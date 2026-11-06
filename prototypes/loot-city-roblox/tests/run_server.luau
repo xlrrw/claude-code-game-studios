@@ -19,6 +19,7 @@ local srv = Instance.new("Folder"); srv.Name = "LootCityServer"; srv.Parent = ga
 for _, n in { "CityBuilder", "ItemFactory", "HomeBuilder" } do
 	local m = Instance.new("ModuleScript"); m.Name = n; m.__path = n; m.Parent = srv
 end
+local adminLs = Instance.new("LocalScript"); adminLs.Name = "AdminClient"; adminLs.Parent = srv
 local serverScript = Instance.new("Script"); serverScript.Name = "Server"; serverScript.Parent = srv
 loadModule(serverScript, "Server")
 local Config = require(cfg)
@@ -121,5 +122,54 @@ print("distinct banners seen", n)
 s = lastState()
 print("final: money", s.money, "day", s.day, "ppm", s.ppm, "home", s.home, "vehicle", s.vehicle, "unlocked2", s.unlocked[2])
 assert(s.home == 2 and s.vehicle == "scooter" and s.unlocked[2])
-game:GetService("Players").PlayerRemoving:Fire(plr)
+MockRemovePlayer(plr)
 print("SERVER TEST OK")
+
+-- ===== developer menu =====
+-- Arrange: owner (UserId 101 == game.CreatorId) and a regular player
+local owner = MockAddPlayer(101)
+local guest = MockAddPlayer(202)
+for _, f in DELAYED do task.spawn(f) end
+local AdminRF = shared.Admin
+assert(owner.PlayerGui:FindFirstChild("LootCityAdmin"), "owner did not get the admin GUI")
+assert(not guest.PlayerGui:FindFirstChild("LootCityAdmin"), "guest must NOT get the admin GUI")
+-- Act/Assert: guest is blocked from every command
+for _, cmd in { "info", "money", "item", "ban", "kick", "reset", "unlockAll", "time", "event", "announce" } do
+	assert(AdminRF.OnServerInvoke(guest, cmd, { target = 202, amount = 1e9, id = "diamond" }) == false, "guest was allowed: " .. cmd)
+end
+-- owner commands work
+local inv = AdminRF.OnServerInvoke
+assert(inv(owner, "money", { target = 202, amount = 12345 }))
+assert(inv(owner, "item", { target = 202, id = "diamond", count = 3 }))
+assert(inv(owner, "upgrade", { target = 202, all = true }))
+for _, w in { "districts", "vehicles", "decor", "collections", "business" } do assert(inv(owner, "unlockAll", { target = 202, what = w }), w) end
+assert(inv(owner, "home", { target = 202, stage = 6 }))
+assert(inv(owner, "time", { t = 0.96 }))
+for _, e in { "truck", "sale", "rain", "courier", "gold", "treasure" } do assert(inv(owner, "event", { name = e }), e) end
+assert(inv(owner, "stopEffects", {}))
+assert(inv(owner, "loot", { op = "cap", n = 60 }))
+assert(inv(owner, "loot", { op = "clear" }))
+assert(inv(owner, "loot", { op = "spawn", id = "goldbar" }))
+assert(inv(owner, "announce", { text = "Привет!" }))
+assert(inv(owner, "tpTo", { target = 202 }))
+assert(inv(owner, "bring", { target = 202 }))
+assert(inv(owner, "tpPos", { x = 10, z = 10 }))
+assert(inv(owner, "saveAll", {}))
+local info = inv(owner, "info", {})
+print("admin info: players", #info.players, "log entries", #info.log, "loot", info.loot, "cap", info.cap)
+local gs
+for i = #PUSHED, 1, -1 do if PUSHED[i].plr == guest and PUSHED[i].msg.type == "state" then gs = PUSHED[i].msg.state break end end
+print("guest after admin: money", gs.money, "home", gs.home, "slots", gs.slots, "vehicles", #gs.vehicles, "colDone", #gs.colDone, "ppm", gs.ppm)
+assert(gs.home == 6 and #gs.vehicles == 4 and #gs.colDone == 4)
+-- owner can't ban/kick himself
+assert(inv(owner, "ban", { target = 101 }) == false and inv(owner, "kick", { target = 101 }) == false)
+-- ban the guest: kicked now and on rejoin
+assert(inv(owner, "ban", { target = 202, reason = "тест" }))
+assert(guest.Kicked, "banned guest was not kicked")
+local again = MockAddPlayer(202)
+assert(again.Kicked, "banned guest could rejoin")
+assert(inv(owner, "unban", { id = 202 }))
+local third = MockAddPlayer(202)
+assert(not third.Kicked, "unbanned player still kicked")
+assert(inv(owner, "reset", { target = 202 }))
+print("ADMIN TEST OK")

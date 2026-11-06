@@ -620,10 +620,68 @@ local function save(plr)
 	end)
 end
 
+-- ---------- admin access & bans ----------
+-- Who may open the developer menu: the place owner (or the group owner for group games),
+-- anyone listed in Config.ADMIN_IDS, and the local tester of an unpublished place in Studio.
+local function isAdmin(plr: Player): boolean
+	if table.find(Config.ADMIN_IDS, plr.UserId) then return true end
+	if game.CreatorType == Enum.CreatorType.User and game.CreatorId ~= 0 and plr.UserId == game.CreatorId then return true end
+	if game.CreatorType == Enum.CreatorType.Group and game.CreatorId ~= 0 then
+		local ok, rank = pcall(function()
+			return (plr :: any):GetRankInGroupAsync(game.CreatorId)
+		end)
+		if ok and rank >= 255 then return true end
+	end
+	if RunService:IsStudio() and game.CreatorId == 0 then return true end
+	return false
+end
+local banStore
+pcall(function()
+	banStore = DataStoreService:GetDataStore("LootCity_Bans_v1")
+end)
+local Bans = {} -- [tostring(userId)] = {name, reason, by, time}
+pcall(function()
+	if banStore then Bans = banStore:GetAsync("list") or {} end
+end)
+local function saveBans()
+	if banStore then
+		pcall(function()
+			banStore:SetAsync("list", Bans)
+		end)
+	end
+end
+local AdminLog = {}
+local function adminLog(admin: Player?, text: string)
+	table.insert(AdminLog, 1, { t = os.date("!%H:%M:%S"), who = if admin then admin.Name else "сервер", text = text })
+	while #AdminLog > 80 do table.remove(AdminLog) end
+	print("[LootCity admin]", if admin then admin.Name else "", text)
+end
+local adminGuiSource = script.Parent:FindFirstChild("AdminClient")
+local function giveAdminGui(plr: Player)
+	if not adminGuiSource or not isAdmin(plr) then return end
+	local pg = plr:WaitForChild("PlayerGui", 10)
+	if not pg or pg:FindFirstChild("LootCityAdmin") then return end
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "LootCityAdmin"
+	gui.ResetOnSpawn = false
+	gui.DisplayOrder = 50
+	gui.IgnoreGuiInset = true
+	local ls = adminGuiSource:Clone()
+	ls.Disabled = false
+	ls.Parent = gui
+	gui.Parent = pg
+end
+
 Players.PlayerAdded:Connect(function(plr)
+	local ban = Bans[tostring(plr.UserId)]
+	if ban then
+		plr:Kick("Вы забанены в Loot City. Причина: " .. tostring(ban.reason or "—"))
+		return
+	end
 	Session[plr] = { passiveAcc = 0, ticket = 0 }
 	Data[plr] = load(plr)
 	setupPlot(plr)
+	task.spawn(giveAdminGui, plr)
 	plr.CharacterAdded:Connect(function(ch)
 		task.wait(0.5)
 		applyVehicle(plr)
@@ -689,11 +747,11 @@ local function spawnChest(d, at)
 	rec.expire = 240
 	return rec
 end
-local function randomEvent()
+local function randomEvent(forced: string?, forcedD: number?)
 	local open = openDistrictsFor()
-	local d = open[math.random(1, #open)]
+	local d = forcedD or open[math.random(1, #open)]
 	local at = randomSpawnIn(d)
-	local ev = ({ "truck", "sale", "rain", "courier", "gold", "treasure" })[math.random(1, 6)]
+	local ev = forced or ({ "truck", "sale", "rain", "courier", "gold", "treasure" })[math.random(1, 6)]
 	PushRE:FireAllClients({ type = "sfx", id = "event" })
 	if ev == "truck" then
 		for _ = 1, 8 do
@@ -955,6 +1013,331 @@ ActionRF.OnServerInvoke = function(plr, name, args)
 	end
 	if res and sfx then push(plr, { type = "sfx", id = sfx }) end
 	sync(plr)
+	return res
+end
+
+-- ---------- developer / admin menu ----------
+local AdminRF: RemoteFunction = remote("RemoteFunction", "Admin")
+local function byId(id): Player?
+	for _, p in Players:GetPlayers() do
+		if p.UserId == tonumber(id) then return p end
+	end
+	return nil
+end
+local function hrpOf(p: Player?)
+	local ch = p and p.Character
+	return ch and ch:FindFirstChild("HumanoidRootPart")
+end
+local function refreshPlayer(p: Player)
+	local s, ses = Data[p], Session[p]
+	if not s or not ses then return end
+	if ses.plotModel then
+		ses.plotModel:ClearAllChildren()
+		HomeBuilder.Sign(ses.plotModel, ses.plot, "Участок: " .. p.DisplayName)
+		HomeBuilder.SetStage(ses.plotModel, ses.plot, s.home)
+		for _, d in s.decor do
+			HomeBuilder.AddDecor(ses.plotModel, ses.plot, d)
+		end
+	end
+	applyVehicle(p)
+	sync(p)
+end
+local function banUser(admin, userId: number, name: string, reason: string)
+	Bans[tostring(userId)] = { name = name, reason = reason, by = admin.Name, time = os.time() }
+	saveBans()
+	pcall(function()
+		(Players :: any):BanAsync({ UserIds = { userId }, ApplyToUniverse = true, Duration = -1, DisplayReason = reason, PrivateReason = "Loot City admin: " .. admin.Name })
+	end)
+	local p = byId(userId)
+	if p then p:Kick("Вы забанены в Loot City. Причина: " .. reason) end
+	adminLog(admin, ("бан %s (%d): %s"):format(name, userId, reason))
+end
+
+local Admin = {}
+function Admin.info(_admin, _a)
+	local list = {}
+	for _, p in Players:GetPlayers() do
+		local s = Data[p]
+		local hrp = hrpOf(p)
+		local nUn = 0
+		if s then
+			for d = 1, 4 do
+				if s.unlocked[d] then nUn += 1 end
+			end
+		end
+		table.insert(list, {
+			id = p.UserId, name = p.Name, display = p.DisplayName, admin = isAdmin(p),
+			money = if s then s.money else 0, home = if s then s.home else 1, districts = nUn,
+			items = if s then #s.inv else 0, rep = if s then s.rep else 0,
+			where = if hrp then DISTRICTS[Config.districtOf(hrp.Position.X, hrp.Position.Z)].name else "—",
+		})
+	end
+	local bans = {}
+	for id, b in Bans do
+		table.insert(bans, { id = id, name = b.name, reason = b.reason, by = b.by })
+	end
+	local fx = {}
+	for k, t in World.effects do
+		table.insert(fx, k .. " " .. math.ceil(t) .. "с")
+	end
+	local nLoot = 0
+	for _ in loot do nLoot += 1 end
+	return { players = list, bans = bans, log = AdminLog, time = World.time, day = World.day, effects = fx, loot = nLoot, cap = CAP, eventIn = math.ceil(World.eventTimer) }
+end
+-- target helpers: a.target = UserId (defaults to the admin)
+local function target(admin, a)
+	local p = if a.target then byId(a.target) else admin
+	return p, p and Data[p]
+end
+function Admin.money(admin, a)
+	local p, s = target(admin, a)
+	local amt = tonumber(a.amount) or 0
+	if not s then return false end
+	if a.set then s.money = math.max(0, amt) else s.money = math.max(0, s.money + amt) end
+	if amt > 0 and not a.set then s.earned += amt end
+	adminLog(admin, ("%s %s: %s$%d"):format(if a.set then "деньги =" else "деньги +", p.Name, "", amt))
+	toast(p, ("Администратор: %s$%d"):format(if a.set then "баланс = " else "+", amt), "#5ee37a")
+	sync(p)
+	return true
+end
+function Admin.item(admin, a)
+	local p, s = target(admin, a)
+	local def = ITEM[a.id]
+	if not s or not def then return false end
+	local n = math.clamp(tonumber(a.count) or 1, 1, 100)
+	for _ = 1, n do
+		table.insert(s.inv, { id = def.id, value = math.floor(def.v * DISTRICTS[4].lootMult ^ 0.35) })
+	end
+	adminLog(admin, ("выдал %s ×%d → %s"):format(def.name, n, p.Name))
+	toast(p, ("Администратор выдал: %s ×%d"):format(def.name, n), "#b26bff")
+	sync(p)
+	return true
+end
+function Admin.upgrade(admin, a)
+	local p, s = target(admin, a)
+	if not s then return false end
+	for _, u in Config.UPGRADES do
+		if a.all or u.id == a.id then
+			local l = if a.all then u.max else math.clamp(tonumber(a.lvl) or 0, 0, u.max)
+			s.upg[u.id] = l
+		end
+	end
+	adminLog(admin, ("уровни улучшений %s → %s"):format(if a.all then "MAX" else tostring(a.id) .. "=" .. tostring(a.lvl), p.Name))
+	sync(p)
+	return true
+end
+function Admin.unlockAll(admin, a)
+	local p, s = target(admin, a)
+	if not s then return false end
+	local what = a.what
+	if what == "districts" then
+		s.unlocked = { true, true, true, true }
+	elseif what == "vehicles" then
+		for _, v in Config.VEHICLES do
+			if not has(s.vehicles, v.id) then table.insert(s.vehicles, v.id) end
+		end
+	elseif what == "decor" then
+		for _, d in Config.DECOR do
+			if not has(s.decor, d.id) then table.insert(s.decor, d.id) end
+		end
+	elseif what == "collections" then
+		for _, it in Config.ITEMS do
+			if it.col then
+				s.col[it.col] = s.col[it.col] or {}
+				if not has(s.col[it.col], it.id) then table.insert(s.col[it.col], it.id) end
+			end
+		end
+		checkCollections(p)
+	elseif what == "business" then
+		for _, b in Config.BUSINESSES do
+			s.biz[b.id] = b.max
+		end
+	else
+		return false
+	end
+	adminLog(admin, ("открыл всё: %s → %s"):format(what, p.Name))
+	refreshPlayer(p)
+	return true
+end
+function Admin.district(admin, a)
+	local p, s = target(admin, a)
+	local d = tonumber(a.d)
+	if not s or not d or d < 1 or d > 4 then return false end
+	s.unlocked[d] = a.on ~= false
+	s.unlocked[1] = true
+	adminLog(admin, ("район %s %s → %s"):format(DISTRICTS[d].name, if s.unlocked[d] then "открыт" else "закрыт", p.Name))
+	sync(p)
+	return true
+end
+function Admin.home(admin, a)
+	local p, s = target(admin, a)
+	local st = math.clamp(tonumber(a.stage) or 1, 1, #Config.HOME_STAGES)
+	if not s then return false end
+	s.home = st
+	adminLog(admin, ("дом %s → %s"):format(Config.HOME_STAGES[st].name, p.Name))
+	refreshPlayer(p)
+	return true
+end
+function Admin.rep(admin, a)
+	local p, s = target(admin, a)
+	if not s then return false end
+	s.rep = math.max(0, s.rep + (tonumber(a.amount) or 0))
+	adminLog(admin, ("репутация %+d → %s"):format(tonumber(a.amount) or 0, p.Name))
+	sync(p)
+	return true
+end
+function Admin.clearInv(admin, a)
+	local p, s = target(admin, a)
+	if not s then return false end
+	s.inv = {}
+	adminLog(admin, "очистил рюкзак " .. p.Name)
+	sync(p)
+	return true
+end
+function Admin.reset(admin, a)
+	local p, s = target(admin, a)
+	if not s then return false end
+	Data[p] = fresh()
+	adminLog(admin, "сбросил прогресс " .. p.Name)
+	toast(p, "Ваш прогресс сброшен администратором.", "#ff5a5a")
+	refreshPlayer(p)
+	return true
+end
+function Admin.kick(admin, a)
+	local p = byId(a.target)
+	if not p or p == admin then return false end
+	local reason = tostring(a.reason or "Кикнут администратором")
+	adminLog(admin, ("кик %s: %s"):format(p.Name, reason))
+	p:Kick(reason)
+	return true
+end
+function Admin.ban(admin, a)
+	local id = tonumber(a.target)
+	if not id or id == admin.UserId then return false end
+	local p = byId(id)
+	local name = if p then p.Name else tostring(a.name or id)
+	banUser(admin, id, name, tostring(a.reason ~= "" and a.reason or "Нарушение правил"))
+	return true
+end
+function Admin.unban(admin, a)
+	local id = tonumber(a.id)
+	if not id then return false end
+	Bans[tostring(id)] = nil
+	saveBans()
+	pcall(function()
+		(Players :: any):UnbanAsync({ UserIds = { id }, ApplyToUniverse = true })
+	end)
+	adminLog(admin, "разбан " .. id)
+	return true
+end
+function Admin.tpTo(admin, a)
+	local me, other = hrpOf(admin), hrpOf(byId(a.target))
+	if not me or not other then return false end
+	me.CFrame = other.CFrame * CFrame.new(0, 0, 5)
+	return true
+end
+function Admin.bring(admin, a)
+	local who = byId(a.target)
+	local me, other = hrpOf(admin), hrpOf(who)
+	if not who or not me or not other then return false end
+	other.CFrame = me.CFrame * CFrame.new(0, 0, -5)
+	adminLog(admin, "притянул " .. who.Name)
+	return true
+end
+function Admin.tpPos(admin, a)
+	local me = hrpOf(admin)
+	local x, z = tonumber(a.x), tonumber(a.z)
+	if not me or not x or not z then return false end
+	me.CFrame = CFrame.new(x, Config.CURB + 5, z)
+	return true
+end
+function Admin.tpHome(admin, a)
+	local p = if a.target then byId(a.target) else admin
+	local me = hrpOf(admin)
+	local ses = p and Session[p]
+	if not me or not ses or not ses.plot then return false end
+	local pl = ses.plot
+	me.CFrame = CFrame.new((pl.x0 + pl.x1) / 2, Config.CURB + 5, if pl.front < 0 then pl.z0 - 6 else pl.z1 + 6)
+	return true
+end
+function Admin.time(admin, a)
+	local t = tonumber(a.t)
+	if not t then return false end
+	World.time = t % 1
+	adminLog(admin, ("время %02d:00"):format(math.floor(World.time * 24)))
+	return true
+end
+function Admin.nextDay(admin, _a)
+	World.day += 1
+	rollMarket()
+	adminLog(admin, "новый день (рынок обновлён)")
+	return true
+end
+function Admin.event(admin, a)
+	local ok = table.find({ "truck", "sale", "rain", "courier", "gold", "treasure" }, a.name)
+	if not ok then return false end
+	local hrp = hrpOf(admin)
+	local d = if hrp then Config.districtOf(hrp.Position.X, hrp.Position.Z) else nil
+	randomEvent(a.name, d)
+	adminLog(admin, "событие " .. a.name)
+	return true
+end
+function Admin.stopEffects(admin, _a)
+	table.clear(World.effects)
+	workspace:SetAttribute("LC_Rain", false)
+	adminLog(admin, "остановил все события")
+	return true
+end
+function Admin.loot(admin, a)
+	if a.op == "clear" then
+		for _, rec in table.clone(loot) do removeLoot(rec) end
+		populate()
+		adminLog(admin, "пересоздал весь лут")
+	elseif a.op == "cap" then
+		CAP = math.clamp(tonumber(a.n) or 40, 5, 150)
+		populate()
+		adminLog(admin, "лимит лута на район = " .. CAP)
+	elseif a.op == "spawn" then
+		local def = ITEM[a.id]
+		local hrp = hrpOf(admin)
+		if not def or not hrp then return false end
+		local pos = hrp.Position + hrp.CFrame.LookVector * 8
+		local rec = spawnLoot(def, Vector3.new(pos.X, Config.CURB, pos.Z), Config.districtOf(pos.X, pos.Z), true, false)
+		rec.expire = 600
+		adminLog(admin, "положил на землю " .. def.name)
+	else
+		return false
+	end
+	return true
+end
+function Admin.announce(admin, a)
+	local text = tostring(a.text or "")
+	if #text == 0 then return false end
+	text = text:sub(1, 200)
+	bannerAll("📢 Объявление", text)
+	adminLog(admin, "объявление: " .. text)
+	return true
+end
+function Admin.saveAll(admin, _a)
+	for _, p in Players:GetPlayers() do
+		save(p)
+	end
+	adminLog(admin, "сохранил всех игроков")
+	return true
+end
+
+AdminRF.OnServerInvoke = function(plr, name, args)
+	if not isAdmin(plr) then
+		warn("[LootCity] blocked admin call from", plr.Name, name)
+		return false
+	end
+	if type(name) ~= "string" or not Admin[name] then return false end
+	args = if type(args) == "table" then args else {}
+	local ok, res = pcall(Admin[name], plr, args)
+	if not ok then
+		warn("LootCity admin error", name, res)
+		return false
+	end
 	return res
 end
 

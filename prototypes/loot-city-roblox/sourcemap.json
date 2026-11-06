@@ -1,0 +1,9 @@
+{"name":"LootCity","className":"DataModel","children":[
+ {"name":"ReplicatedStorage","className":"ReplicatedStorage","children":[{"name":"LootCityShared","className":"Folder","children":[{"name":"Config","className":"ModuleScript","filePaths":["src/shared/Config.lua"]}]}]},
+ {"name":"ServerScriptService","className":"ServerScriptService","children":[{"name":"LootCityServer","className":"Folder","children":[
+   {"name":"CityBuilder","className":"ModuleScript","filePaths":["src/server/CityBuilder.lua"]},
+   {"name":"ItemFactory","className":"ModuleScript","filePaths":["src/server/ItemFactory.lua"]},
+   {"name":"HomeBuilder","className":"ModuleScript","filePaths":["src/server/HomeBuilder.lua"]},
+   {"name":"Server","className":"Script","filePaths":["src/server/Server.server.lua"]}]}]},
+ {"name":"StarterPlayer","className":"StarterPlayer","children":[{"name":"StarterPlayerScripts","className":"StarterPlayerScripts","children":[{"name":"LootCityClient","className":"LocalScript","filePaths":["src/client/Client.client.lua"]}]}]}
+]}

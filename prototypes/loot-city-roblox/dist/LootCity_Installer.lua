@@ -230,7 +230,7 @@ end
 
 -- Developer menu access. The place owner (or group owner) is always an admin.
 -- To give access to someone else, add their numeric UserId here, e.g. { 12345678 }.
-Config.ADMIN_IDS = {} :: { number }
+Config.ADMIN_IDS = { 5336804980 } :: { number }
 
 Config.DAY_LENGTH = 720 -- seconds per in-game day
 Config.START_MONEY = 20

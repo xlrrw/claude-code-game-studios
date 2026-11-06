@@ -173,3 +173,10 @@ local third = MockAddPlayer(202)
 assert(not third.Kicked, "unbanned player still kicked")
 assert(inv(owner, "reset", { target = 202 }))
 print("ADMIN TEST OK")
+-- the listed UserId must get the admin GUI even when the place belongs to someone else
+game.CreatorId = 999
+local srvAdmin = MockAddPlayer(5336804980)
+for _, f in DELAYED do task.spawn(f) end
+assert(srvAdmin.PlayerGui:FindFirstChild("LootCityAdmin"), "listed UserId did not get admin GUI")
+assert(game:GetService("ReplicatedStorage").LootCityShared.Admin.OnServerInvoke(srvAdmin, "money", { amount = 1 }), "listed UserId cannot run commands")
+print("ADMIN ID TEST OK")

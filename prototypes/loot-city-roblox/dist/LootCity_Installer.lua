@@ -1333,6 +1333,8 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
+local GuiService = game:GetService("GuiService")
+local TOUCH = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
 
 local player = Players.LocalPlayer
 local Shared = ReplicatedStorage:WaitForChild("LootCityShared")
@@ -1404,23 +1406,41 @@ do
 	local dragging, start, startPos
 	title.Active = true
 	title.InputBegan:Connect(function(i)
-		if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging, start, startPos = true, i.Position, win.Position end
+		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then dragging, start, startPos = true, i.Position, win.Position end
 	end)
 	UserInputService.InputChanged:Connect(function(i)
-		if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
+		if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
 			local d = i.Position - start
 			win.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
 		end
 	end)
 	UserInputService.InputEnded:Connect(function(i)
-		if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then dragging = false end
 	end)
 end
 
-local toggleB = btn("🛠 Админ [F2]", ACC, nil)
+local toggleB = btn(if TOUCH then "🛠 Админ" else "🛠 Админ [F2]", ACC, nil)
 toggleB.AnchorPoint = Vector2.new(0.5, 0)
-toggleB.Position = UDim2.new(0.5, 0, 0, 8)
+toggleB.Position = UDim2.new(0.5, 0, 0, GuiService:GetGuiInset().Y + 6) -- below the Roblox top bar
+toggleB.Size = UDim2.fromOffset(0, if TOUCH then 40 else 30)
+toggleB.TextSize = if TOUCH then 16 else 13
 toggleB.Parent = gui
+
+-- fit the window on small (phone) screens
+local winScale = new("UIScale", { Parent = win })
+local function fit()
+	local cam = workspace.CurrentCamera
+	if not cam then return end
+	local vp = cam.ViewportSize
+	local inset = GuiService:GetGuiInset().Y
+	winScale.Scale = math.clamp(math.min((vp.Y - inset - 16) / 660, (vp.X - 16) / 600), 0.45, 1)
+	if TOUCH or winScale.Scale < 1 then
+		win.AnchorPoint = Vector2.new(0.5, 0.5)
+		win.Position = UDim2.new(0.5, 0, 0.5, inset / 2)
+	end
+end
+fit()
+workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(fit)
 
 -- ===== state =====
 local Info = nil
@@ -1497,7 +1517,21 @@ local function drawTabs()
 end
 
 -- ===== self tools (client-side) =====
-local Self = { fly = false, noclip = false, speed = 1 }
+local Self = { fly = false, noclip = false, speed = 1, up = false, down = false }
+-- on-screen up/down buttons for flying on a phone (horizontal = the normal thumbstick)
+local flyPad = new("Frame", { Visible = false, BackgroundTransparency = 1, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -16, 0.45, 0), Size = UDim2.fromOffset(64, 140), Parent = gui },
+	{ new("UIListLayout", { Padding = UDim.new(0, 12) }) })
+local function holdBtn(text, field)
+	local b = new("TextButton", { Text = text, Font = FONT_B, TextSize = 28, TextColor3 = Color3.new(1, 1, 1), BackgroundColor3 = ACC, BackgroundTransparency = 0.25, Size = UDim2.fromOffset(64, 64), Parent = flyPad }, { new("UICorner", { CornerRadius = UDim.new(1, 0) }) })
+	b.InputBegan:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then Self[field] = true end
+	end)
+	b.InputEnded:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then Self[field] = false end
+	end)
+end
+holdBtn("▲", "up")
+holdBtn("▼", "down")
 local flyLV, flyAtt
 local function setFly(on)
 	Self.fly = on
@@ -1507,6 +1541,7 @@ local function setFly(on)
 	if flyLV then flyLV:Destroy() flyLV = nil end
 	if flyAtt then flyAtt:Destroy() flyAtt = nil end
 	if hum then hum.PlatformStand = on end
+	flyPad.Visible = on and UserInputService.TouchEnabled
 	if on and hrp then
 		flyAtt = new("Attachment", { Parent = hrp })
 		flyLV = new("LinearVelocity", { Attachment0 = flyAtt, MaxForce = math.huge, VectorVelocity = Vector3.zero, RelativeTo = Enum.ActuatorRelativeTo.World, Parent = hrp })
@@ -1529,12 +1564,18 @@ RunService.Stepped:Connect(function()
 		if UserInputService:IsKeyDown(Enum.KeyCode.A) then dir -= cam.CFrame.RightVector end
 		if UserInputService:IsKeyDown(Enum.KeyCode.Space) then dir += Vector3.yAxis end
 		if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then dir -= Vector3.yAxis end
+		-- phone: thumbstick gives the humanoid's MoveDirection; ▲/▼ buttons give vertical
+		local hum = ch:FindFirstChildOfClass("Humanoid")
+		if dir.Magnitude == 0 and hum and hum.MoveDirection.Magnitude > 0.05 then dir = hum.MoveDirection end
+		if Self.up then dir += Vector3.yAxis end
+		if Self.down then dir -= Vector3.yAxis end
 		flyLV.VectorVelocity = if dir.Magnitude > 0 then dir.Unit * 90 * Self.speed else Vector3.zero
 	end
 end)
 player.CharacterAdded:Connect(function()
 	Self.fly = false
 	flyLV, flyAtt = nil, nil
+	flyPad.Visible = false
 end)
 
 -- ===== tabs =====
@@ -1689,7 +1730,7 @@ local function drawMe()
 		btn(if Self.fly then "✈️ Полёт: ВКЛ" else "✈️ Полёт: выкл", if Self.fly then ACC else nil, function() setFly(not Self.fly); render() end),
 		btn(if Self.noclip then "👻 Сквозь стены: ВКЛ" else "👻 Сквозь стены: выкл", if Self.noclip then ACC else nil, function() Self.noclip = not Self.noclip; render() end),
 	}))
-	add(label("Полёт: WASD + Space (вверх) / Ctrl (вниз), направление — по камере.", { TextSize = 12, TextColor3 = DIM }))
+	add(label(if UserInputService.TouchEnabled then "Полёт на телефоне: джойстик — направление, кнопки ▲ ▼ справа — вверх/вниз." else "Полёт: WASD + Space (вверх) / Ctrl (вниз), направление — по камере.", { TextSize = 12, TextColor3 = DIM, TextWrapped = true, Size = UDim2.new(1, 0, 0, 30) }))
 	local sp = {}
 	for _, m in { 1, 2, 3, 5, 10 } do
 		table.insert(sp, btn("×" .. m, if Self.speed == m then ACC else nil, function()
@@ -3334,8 +3375,10 @@ end
 local gui = new("ScreenGui", { Name = "LootCityUI", ResetOnSpawn = false, IgnoreGuiInset = true, ZIndexBehavior = Enum.ZIndexBehavior.Sibling, Parent = player:WaitForChild("PlayerGui") })
 
 -- ============ HUD ============
+-- phones/tablets: smaller HUD, buttons away from the thumbstick
+local TOUCH = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
 local tl = new("Frame", { BackgroundTransparency = 1, Position = UDim2.new(0, 18, 0, 60), Size = UDim2.new(0, 320, 0, 300), Parent = gui },
-	{ new("UIListLayout", { Padding = UDim.new(0, 8) }) })
+	{ new("UIListLayout", { Padding = UDim.new(0, 8) }), new("UIScale", { Scale = if TOUCH then 0.75 else 1 }) })
 local function pill(h)
 	return new("Frame", { BackgroundColor3 = GLASS, BackgroundTransparency = 0.35, Size = UDim2.new(0, 0, 0, h), AutomaticSize = Enum.AutomaticSize.X, Parent = tl }, { corner(12), stroke(), pad(10) })
 end
@@ -3349,7 +3392,7 @@ local distL = label({ Text = "📍 Окраина", Size = UDim2.new(0, 0, 1, 0)
 local fxFrame = new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(0, 320, 0, 80), Parent = tl }, { new("UIListLayout", { Padding = UDim.new(0, 4) }) })
 
 -- minimap
-local MAPSIZE = 220
+local MAPSIZE = if TOUCH then 130 else 220
 local mapHolder = new("CanvasGroup", { BackgroundColor3 = Color3.fromRGB(10, 12, 16), BackgroundTransparency = 0.25, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -18, 0, 60), Size = UDim2.fromOffset(MAPSIZE, MAPSIZE), Parent = gui },
 	{ new("UICorner", { CornerRadius = UDim.new(0.5, 0) }) })
 new("UIStroke", { Color = Color3.fromRGB(255, 255, 255), Transparency = 0.6, Thickness = 2, Parent = mapHolder })
@@ -3450,8 +3493,8 @@ local function showBanner(t, s)
 end
 
 -- mobile/desktop buttons
-local btnBar = new("Frame", { BackgroundTransparency = 1, AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 18, 1, -18), Size = UDim2.fromOffset(400, 44), Parent = gui },
-	{ new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 8) }) })
+local btnBar = new("Frame", { BackgroundTransparency = 1, AnchorPoint = if TOUCH then Vector2.new(0.5, 1) else Vector2.new(0, 1), Position = if TOUCH then UDim2.new(0.5, 0, 1, -12) else UDim2.new(0, 18, 1, -18), Size = UDim2.fromOffset(if TOUCH then 320 else 400, 44), Parent = gui },
+	{ new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 8), HorizontalAlignment = if TOUCH then Enum.HorizontalAlignment.Center else Enum.HorizontalAlignment.Left }) })
 
 -- ============ sounds ============
 local function sfx(id, pitch)
@@ -3473,7 +3516,8 @@ end
 -- ============ modal (phone + NPC) ============
 local modal = new("Frame", { Visible = false, BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 0.5, Size = UDim2.fromScale(1, 1), ZIndex = 20, Parent = gui })
 local card = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.new(0.62, 0, 0.8, 0), BackgroundColor3 = GLASS, BackgroundTransparency = 0.08, ZIndex = 21, Parent = modal },
-	{ corner(18), stroke(), new("UISizeConstraint", { MaxSize = Vector2.new(940, 760), MinSize = Vector2.new(520, 380) }) })
+	{ corner(18), stroke(), new("UISizeConstraint", { MaxSize = Vector2.new(940, 760), MinSize = Vector2.new(300, 240) }) })
+if TOUCH then card.Size = UDim2.new(0.96, 0, 0.92, 0) end
 local head = new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 78), ZIndex = 22, Parent = card }, { pad(16) })
 local headIcon = label({ Text = "📱", TextSize = 36, Size = UDim2.fromOffset(50, 46), TextXAlignment = Enum.TextXAlignment.Center, ZIndex = 22, Parent = head })
 local headTitle = label({ Text = "", Font = FONT_B, TextSize = 22, Position = UDim2.fromOffset(62, 0), Size = UDim2.new(1, -300, 0, 26), ZIndex = 22, Parent = head })
@@ -3820,10 +3864,10 @@ local function closeModal()
 end
 closeBtn.MouseButton1Click:Connect(closeModal)
 
-button("📱 Телефон [Tab]", false, function()
+button(if TOUCH then "📱 Телефон" else "📱 Телефон [Tab]", false, function()
 	if Modal.open then closeModal() else openModal("phone") end
 end, { BackgroundColor3 = GLASS, BackgroundTransparency = 0.3, Parent = btnBar })
-button("🛵 Транспорт [V]", false, function()
+button(if TOUCH then "🛵 Транспорт" else "🛵 Транспорт [V]", false, function()
 	if not S then return end
 	if S.vehicle then act("ride", { id = nil }) return end
 	for k = #Config.VEHICLES, 1, -1 do

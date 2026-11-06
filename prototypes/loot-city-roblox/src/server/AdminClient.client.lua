@@ -6,6 +6,8 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
+local GuiService = game:GetService("GuiService")
+local TOUCH = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
 
 local player = Players.LocalPlayer
 local Shared = ReplicatedStorage:WaitForChild("LootCityShared")
@@ -77,23 +79,41 @@ do
 	local dragging, start, startPos
 	title.Active = true
 	title.InputBegan:Connect(function(i)
-		if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging, start, startPos = true, i.Position, win.Position end
+		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then dragging, start, startPos = true, i.Position, win.Position end
 	end)
 	UserInputService.InputChanged:Connect(function(i)
-		if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
+		if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
 			local d = i.Position - start
 			win.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
 		end
 	end)
 	UserInputService.InputEnded:Connect(function(i)
-		if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then dragging = false end
 	end)
 end
 
-local toggleB = btn("🛠 Админ [F2]", ACC, nil)
+local toggleB = btn(if TOUCH then "🛠 Админ" else "🛠 Админ [F2]", ACC, nil)
 toggleB.AnchorPoint = Vector2.new(0.5, 0)
-toggleB.Position = UDim2.new(0.5, 0, 0, 8)
+toggleB.Position = UDim2.new(0.5, 0, 0, GuiService:GetGuiInset().Y + 6) -- below the Roblox top bar
+toggleB.Size = UDim2.fromOffset(0, if TOUCH then 40 else 30)
+toggleB.TextSize = if TOUCH then 16 else 13
 toggleB.Parent = gui
+
+-- fit the window on small (phone) screens
+local winScale = new("UIScale", { Parent = win })
+local function fit()
+	local cam = workspace.CurrentCamera
+	if not cam then return end
+	local vp = cam.ViewportSize
+	local inset = GuiService:GetGuiInset().Y
+	winScale.Scale = math.clamp(math.min((vp.Y - inset - 16) / 660, (vp.X - 16) / 600), 0.45, 1)
+	if TOUCH or winScale.Scale < 1 then
+		win.AnchorPoint = Vector2.new(0.5, 0.5)
+		win.Position = UDim2.new(0.5, 0, 0.5, inset / 2)
+	end
+end
+fit()
+workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(fit)
 
 -- ===== state =====
 local Info = nil
@@ -170,7 +190,21 @@ local function drawTabs()
 end
 
 -- ===== self tools (client-side) =====
-local Self = { fly = false, noclip = false, speed = 1 }
+local Self = { fly = false, noclip = false, speed = 1, up = false, down = false }
+-- on-screen up/down buttons for flying on a phone (horizontal = the normal thumbstick)
+local flyPad = new("Frame", { Visible = false, BackgroundTransparency = 1, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -16, 0.45, 0), Size = UDim2.fromOffset(64, 140), Parent = gui },
+	{ new("UIListLayout", { Padding = UDim.new(0, 12) }) })
+local function holdBtn(text, field)
+	local b = new("TextButton", { Text = text, Font = FONT_B, TextSize = 28, TextColor3 = Color3.new(1, 1, 1), BackgroundColor3 = ACC, BackgroundTransparency = 0.25, Size = UDim2.fromOffset(64, 64), Parent = flyPad }, { new("UICorner", { CornerRadius = UDim.new(1, 0) }) })
+	b.InputBegan:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then Self[field] = true end
+	end)
+	b.InputEnded:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then Self[field] = false end
+	end)
+end
+holdBtn("▲", "up")
+holdBtn("▼", "down")
 local flyLV, flyAtt
 local function setFly(on)
 	Self.fly = on
@@ -180,6 +214,7 @@ local function setFly(on)
 	if flyLV then flyLV:Destroy() flyLV = nil end
 	if flyAtt then flyAtt:Destroy() flyAtt = nil end
 	if hum then hum.PlatformStand = on end
+	flyPad.Visible = on and UserInputService.TouchEnabled
 	if on and hrp then
 		flyAtt = new("Attachment", { Parent = hrp })
 		flyLV = new("LinearVelocity", { Attachment0 = flyAtt, MaxForce = math.huge, VectorVelocity = Vector3.zero, RelativeTo = Enum.ActuatorRelativeTo.World, Parent = hrp })
@@ -202,12 +237,18 @@ RunService.Stepped:Connect(function()
 		if UserInputService:IsKeyDown(Enum.KeyCode.A) then dir -= cam.CFrame.RightVector end
 		if UserInputService:IsKeyDown(Enum.KeyCode.Space) then dir += Vector3.yAxis end
 		if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then dir -= Vector3.yAxis end
+		-- phone: thumbstick gives the humanoid's MoveDirection; ▲/▼ buttons give vertical
+		local hum = ch:FindFirstChildOfClass("Humanoid")
+		if dir.Magnitude == 0 and hum and hum.MoveDirection.Magnitude > 0.05 then dir = hum.MoveDirection end
+		if Self.up then dir += Vector3.yAxis end
+		if Self.down then dir -= Vector3.yAxis end
 		flyLV.VectorVelocity = if dir.Magnitude > 0 then dir.Unit * 90 * Self.speed else Vector3.zero
 	end
 end)
 player.CharacterAdded:Connect(function()
 	Self.fly = false
 	flyLV, flyAtt = nil, nil
+	flyPad.Visible = false
 end)
 
 -- ===== tabs =====
@@ -362,7 +403,7 @@ local function drawMe()
 		btn(if Self.fly then "✈️ Полёт: ВКЛ" else "✈️ Полёт: выкл", if Self.fly then ACC else nil, function() setFly(not Self.fly); render() end),
 		btn(if Self.noclip then "👻 Сквозь стены: ВКЛ" else "👻 Сквозь стены: выкл", if Self.noclip then ACC else nil, function() Self.noclip = not Self.noclip; render() end),
 	}))
-	add(label("Полёт: WASD + Space (вверх) / Ctrl (вниз), направление — по камере.", { TextSize = 12, TextColor3 = DIM }))
+	add(label(if UserInputService.TouchEnabled then "Полёт на телефоне: джойстик — направление, кнопки ▲ ▼ справа — вверх/вниз." else "Полёт: WASD + Space (вверх) / Ctrl (вниз), направление — по камере.", { TextSize = 12, TextColor3 = DIM, TextWrapped = true, Size = UDim2.new(1, 0, 0, 30) }))
 	local sp = {}
 	for _, m in { 1, 2, 3, 5, 10 } do
 		table.insert(sp, btn("×" .. m, if Self.speed == m then ACC else nil, function()
